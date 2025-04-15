@@ -1,0 +1,10 @@
+#version 450
+layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (rgba8, set = 0, binding = 0) uniform image2D img;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    vec4 color = vec4(float(pixel.x % 256) / 255.0, float(pixel.y % 256) / 255.0, 1.0, 1.0);
+    imageStore(img, pixel, color);
+}
