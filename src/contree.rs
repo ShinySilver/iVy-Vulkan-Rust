@@ -1,6 +1,6 @@
 use crate::mempool::MemoryPool;
-use std::fmt::Display;
 use glam::UVec3;
+use std::fmt::Display;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -57,8 +57,11 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
         {
             let node = self.nodes.acquire_mut(target_node_index);
             if node.bitmask & (0x1u64 << child_xyz) != 0 {
-                let child_local_index = (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
-                let target = self.voxels.acquire_mut(node.children_index() + child_local_index);
+                let child_local_index =
+                    (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
+                let target = self
+                    .voxels
+                    .acquire_mut(node.children_index() + child_local_index);
                 *target = voxel;
                 println!();
                 return;
@@ -79,7 +82,8 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
                     return Default::default();
                 }
 
-                let child_local_index = (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
+                let child_local_index =
+                    (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
                 let voxel_index = node.children_index() + child_local_index;
                 *self.voxels.acquire(voxel_index)
             }
@@ -93,17 +97,26 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
 
     fn create_node_child(&mut self, parent_index: usize, child_xyz: u32) -> (&mut Node, usize) {
         let parent = *self.nodes.acquire(parent_index);
-        assert_eq!(parent.bitmask & (0x1u64 << child_xyz), 0, "Overriding an existing child node");
+        assert_eq!(
+            parent.bitmask & (0x1u64 << child_xyz),
+            0,
+            "Overriding an existing child node"
+        );
         let previous_child_count = parent.bitmask.count_ones();
         let new_child_local_index = (parent.bitmask & !(u64::MAX << child_xyz)).count_ones();
-        let (_, new_child_array_index) = self.nodes.allocate_multiple((previous_child_count + 1) as usize);
+        let (_, new_child_array_index) = self
+            .nodes
+            .allocate_multiple((previous_child_count + 1) as usize);
         let new_child_index = new_child_array_index + new_child_local_index as usize;
         for i in 0..new_child_local_index as usize {
-            *self.nodes.acquire_mut(new_child_array_index + i) = *self.nodes.acquire(parent.children_index() + i);
+            *self.nodes.acquire_mut(new_child_array_index + i) =
+                *self.nodes.acquire(parent.children_index() + i);
         }
         *self.nodes.acquire_mut(new_child_index) = Default::default();
         for i in new_child_local_index..previous_child_count {
-            *self.nodes.acquire_mut(new_child_array_index + i as usize + 1) =
+            *self
+                .nodes
+                .acquire_mut(new_child_array_index + i as usize + 1) =
                 *self.nodes.acquire(parent.children_index() + i as usize);
         }
         {
@@ -118,14 +131,19 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
         let parent = *self.nodes.acquire(parent_index);
         let previous_child_count = parent.bitmask.count_ones();
         let new_child_local_index = (parent.bitmask & !(u64::MAX << child_xyz)).count_ones();
-        let (_, new_child_array_index) = self.voxels.allocate_multiple((previous_child_count + 1) as usize);
+        let (_, new_child_array_index) = self
+            .voxels
+            .allocate_multiple((previous_child_count + 1) as usize);
         let new_child_index = new_child_array_index + new_child_local_index as usize;
         for i in 0..new_child_local_index as usize {
-            *self.voxels.acquire_mut(new_child_array_index + i) = *self.voxels.acquire(parent.children_index() + i);
+            *self.voxels.acquire_mut(new_child_array_index + i) =
+                *self.voxels.acquire(parent.children_index() + i);
         }
         *self.voxels.acquire_mut(new_child_index) = Default::default();
         for i in new_child_local_index..previous_child_count {
-            *self.voxels.acquire_mut(new_child_array_index + i as usize + 1) =
+            *self
+                .voxels
+                .acquire_mut(new_child_array_index + i as usize + 1) =
                 *self.voxels.acquire(parent.children_index() + i as usize);
         }
         {
@@ -147,7 +165,8 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
             if (node.bitmask & (0x1u64 << child_xyz)) == 0 {
                 return (None, stack);
             }
-            let child_index = node.children_index() + (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
+            let child_index = node.children_index()
+                + (node.bitmask & !(u64::MAX << child_xyz)).count_ones() as usize;
             node = self.nodes.acquire(child_index);
             stack.push(child_index);
         }

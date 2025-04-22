@@ -15,7 +15,10 @@ impl<T: Default + Copy> MemoryPool<T> {
         match self.holes[0].pop() {
             Some(index) => (&mut self.memory[index], index),
             None => {
-                assert!(self.memory.len() + 1 <= self.memory.capacity(), "Out of memory!");
+                assert!(
+                    self.memory.len() + 1 <= self.memory.capacity(),
+                    "Out of memory!"
+                );
                 let index = self.memory.len();
                 self.memory.push(T::default());
                 (&mut self.memory[index], index)
@@ -28,9 +31,13 @@ impl<T: Default + Copy> MemoryPool<T> {
         match self.holes[count - 1].pop() {
             Some(index) => (&mut self.memory[index..index + count], index),
             None => {
-                assert!(self.memory.len() + count <= self.memory.capacity(), "Out of memory!");
+                assert!(
+                    self.memory.len() + count <= self.memory.capacity(),
+                    "Out of memory!"
+                );
                 let index = self.memory.len();
-                self.memory.extend(std::iter::repeat(T::default()).take(count));
+                self.memory
+                    .extend(std::iter::repeat(T::default()).take(count));
                 (&mut self.memory[index..], index)
             }
         }

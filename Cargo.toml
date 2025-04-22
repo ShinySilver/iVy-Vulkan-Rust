@@ -14,6 +14,7 @@ codegen-units=1
 
 [dependencies]
 winit = "0.29.15"
+winit_input_helper = "0.16.0"
 ash = { version = "0.38.0", features = ["linked"] }
 ash-window = "0.13.0"
 raw-window-handle = "0.6.2"

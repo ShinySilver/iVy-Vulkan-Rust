@@ -3,9 +3,11 @@ use ash::khr;
 use ash::vk;
 
 use std::ffi::CStr;
+use ash::vk::DeviceSize;
 use log::{debug, info, warn, error};
 use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use crate::camera::{Camera, Projection};
 
 pub struct Renderer {
     // Core Vulkan
@@ -33,6 +35,11 @@ pub struct Renderer {
     storage_image_memory: vk::DeviceMemory,
     storage_image_view: vk::ImageView,
     storage_image_extent: (u32, u32),
+
+    // Camera UBO
+    camera_buffer: vk::Buffer,
+    camera_buffer_memory: vk::DeviceMemory,
+    camera_mapped_ptr: *mut CameraUBO,
 
     // Descriptors
     descriptor_pool: vk::DescriptorPool,
@@ -85,6 +92,13 @@ macro_rules! load_shader_module {
     }};
 }
 
+#[repr(C)]
+pub struct CameraUBO {
+    pub position: glam::Vec4,
+    pub inv_view: glam::Mat4,
+    pub inv_proj: glam::Mat4,
+}
+
 impl Renderer {
     pub fn new(window: &Window) -> Self {
         let entry = ash::Entry::linked();
@@ -113,7 +127,7 @@ impl Renderer {
         let instance = unsafe { entry.create_instance(&create_info, None).unwrap() };
 
         // Bonus: Enable validation layer
-        let debug_utils = ash::ext::debug_utils::Instance::new(&entry, &instance);
+        let debug_utils = ext::debug_utils::Instance::new(&entry, &instance);
         let debug_create_info = vk::DebugUtilsMessengerCreateInfoEXT {
             message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                 | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
@@ -141,6 +155,9 @@ impl Renderer {
         let physical_device = unsafe {
             instance.enumerate_physical_devices().unwrap()
         }[0];
+        let memory_properties = unsafe {
+            instance.get_physical_device_memory_properties(physical_device)
+        };
 
         // 5. Extracting the surface capabilities
         let surface_caps = unsafe {
@@ -206,12 +223,68 @@ impl Renderer {
             device.create_fence(&fence_info, None).unwrap()
         };
 
-        // 11. Descriptor set layout
+        // 11. Creating buffers for camera and projection
+        let camera_ubo_size = std::mem::size_of::<CameraUBO>() as DeviceSize;
+        let camera_buffer = unsafe {
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(camera_ubo_size)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            device.create_buffer(&buffer_info, None)
+                .expect("Failed to create camera buffer")
+        };
+        let buffer_info = vk::DescriptorBufferInfo {
+            buffer: camera_buffer,
+            offset: 0,
+            range: std::mem::size_of::<CameraUBO>() as vk::DeviceSize,
+        };
+        let camera_buffer_memory = unsafe {
+            let mem_requirements = unsafe {
+                device.get_buffer_memory_requirements(camera_buffer)
+            };
+            let memory_type_index = memory_properties
+                .memory_types
+                .iter()
+                .enumerate()
+                .find(|(i, mem_type)| {
+                    (mem_requirements.memory_type_bits & (1u32 << i)) != 0
+                        && mem_type.property_flags.contains(
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )
+                })
+                .map(|(i, _)| i as u32)
+                .expect("Failed to find suitable memory type!");
+            let alloc_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_requirements.size)
+                .memory_type_index(memory_type_index);
+            device.allocate_memory(&alloc_info, None)
+                .expect("Failed to allocate buffer memory")
+        };
+        unsafe {
+            device.bind_buffer_memory(camera_buffer, camera_buffer_memory, 0)
+                .expect("Failed to bind buffer memory");
+        }
+        let camera_mapped_ptr = unsafe {
+            device.map_memory(
+                camera_buffer_memory,
+                0,
+                camera_ubo_size,
+                vk::MemoryMapFlags::empty(),
+            ).expect("Failed to map buffer memory") as *mut CameraUBO
+        };
+
+        // 12. Descriptor set layout
         let layout_binding = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT)];
+            .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE), ];
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(&layout_binding);
         let descriptor_set_layout = unsafe {
@@ -341,7 +414,7 @@ impl Renderer {
             device.destroy_shader_module(fullscreen_frag_shader, None);
         }
 
-        // 16. Create renderer struct
+        // 17. Create renderer struct
         let mut renderer = Renderer {
             entry,
             instance,
@@ -363,6 +436,9 @@ impl Renderer {
             storage_image_memory: vk::DeviceMemory::null(),
             storage_image_view: vk::ImageView::null(),
             storage_image_extent: (0, 0),
+            camera_buffer,
+            camera_buffer_memory,
+            camera_mapped_ptr,
             descriptor_pool: vk::DescriptorPool::null(),
             descriptor_set_layout,
             compute_descriptor_set: vk::DescriptorSet::null(),
@@ -380,7 +456,7 @@ impl Renderer {
             needs_resize: false,
         };
 
-        // 16. Full resize setup (also records command buffers)
+        // 18. Full resize setup (also records command buffers)
         renderer.resize(window);
         renderer
     }
@@ -404,30 +480,44 @@ impl Renderer {
         self.record_commands();
     }
 
-    pub fn draw(&mut self, window: &Window) {
+    pub fn draw(&mut self, window: &Window, projection: &Projection, camera: &Camera) {
+        // If during last frame the swapchain was marked as suboptimal, we ensure a resize here
         if self.needs_resize {
             self.resize(window);
         }
+
+        // Sync with the GPU for the oldest in-flight fence
         unsafe {
             self.device
-                .wait_for_fences(&[self.in_flight_fence], true, std::u64::MAX)
+                .wait_for_fences(&[self.in_flight_fence], true, u64::MAX)
                 .expect("Failed to wait for fence");
             self.device
                 .reset_fences(&[self.in_flight_fence])
                 .expect("Failed to reset fence");
         }
 
+        // Acquire next swapchain image
         let (image_index, _) = unsafe {
             self.swapchain_loader
                 .acquire_next_image(
                     self.swapchain,
-                    std::u64::MAX,
+                    u64::MAX,
                     self.image_available_semaphore,
                     vk::Fence::null(),
                 )
                 .expect("Failed to acquire next image")
         };
         self.current_image_index = image_index;
+
+        // Update the camera UBO
+        let inv_view = camera.view_matrix().inverse();
+        let inv_proj = projection.projection_matrix().inverse();
+        let ubo_data = CameraUBO {
+            position: camera.position.extend(1.0),
+            inv_view,
+            inv_proj,
+        };
+        unsafe { std::ptr::copy_nonoverlapping(&ubo_data, self.camera_mapped_ptr, 1) };
 
         // Submit the commands for both compute and graphics
         let wait_semaphores = [self.image_available_semaphore];
@@ -443,6 +533,8 @@ impl Renderer {
             self.device
                 .queue_submit(self.queue, &submit_info, self.in_flight_fence)
         };
+
+        // Handle out of date and suboptimal swapchain
         match result {
             Ok(_) => {} // all good
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return,
@@ -450,17 +542,18 @@ impl Renderer {
             Err(e) => panic!("Failed to submit draw call: {:?}", e),
         }
 
-        // Present
+        // Present framebuffer
         let swapchains = &[self.swapchain];
         let image_indices = &[image_index];
         let present_info = vk::PresentInfoKHR::default()
             .swapchains(swapchains)
             .image_indices(image_indices);
-
         let result = unsafe {
             self.swapchain_loader
                 .queue_present(self.queue, &present_info)
         };
+
+        // Handle out of date and suboptimal swapchain again
         match result {
             Ok(_) => {} // all good
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return,
@@ -478,7 +571,7 @@ impl Renderer {
                 .unwrap()
         };
         let extent = match surface_caps.current_extent.width {
-            std::u32::MAX => {
+            u32::MAX => {
                 let size = window.inner_size();
                 vk::Extent2D {
                     width: size.width,
@@ -600,7 +693,6 @@ impl Renderer {
                     .level_count(1)
                     .layer_count(1),
             );
-
         let image_view = unsafe { self.device.create_image_view(&view_info, None).unwrap() };
 
         self.storage_image = image;
@@ -693,14 +785,25 @@ impl Renderer {
             image_layout: vk::ImageLayout::GENERAL,
             sampler: vk::Sampler::null(),
         }];
+        let buffer_info = vk::DescriptorBufferInfo {
+            buffer: self.camera_buffer,
+            offset: 0,
+            range: size_of::<CameraUBO>() as vk::DeviceSize,
+        };
         for &set in &descriptor_sets {
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(&image_info);
-
-            unsafe { self.device.update_descriptor_sets(&[write], &[]) };
+            let write = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .image_info(&image_info),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_sets[0])
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&buffer_info))
+            ];
+            unsafe { self.device.update_descriptor_sets(&write, &[]) };
         }
         self.descriptor_pool = descriptor_pool;
         self.compute_descriptor_set = descriptor_sets[0];

@@ -2,6 +2,11 @@
 layout (local_size_x = 16, local_size_y = 16) in;
 
 layout (rgba8, set = 0, binding = 0) uniform image2D img;
+layout (set = 0, binding = 1) uniform CameraData {
+    vec4 position;
+    mat4 invView;
+    mat4 invProj;
+} camera;
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
