@@ -3,7 +3,6 @@ use ash::khr;
 use ash::vk;
 
 use std::ffi::CStr;
-use ash::vk::DeviceSize;
 use log::{debug, info, warn, error};
 use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -224,7 +223,7 @@ impl Renderer {
         };
 
         // 11. Creating buffers for camera and projection
-        let camera_ubo_size = std::mem::size_of::<CameraUBO>() as DeviceSize;
+        let camera_ubo_size = size_of::<CameraUBO>() as vk::DeviceSize;
         let camera_buffer = unsafe {
             let buffer_info = vk::BufferCreateInfo::default()
                 .size(camera_ubo_size)
@@ -236,7 +235,7 @@ impl Renderer {
         let buffer_info = vk::DescriptorBufferInfo {
             buffer: camera_buffer,
             offset: 0,
-            range: std::mem::size_of::<CameraUBO>() as vk::DeviceSize,
+            range: size_of::<CameraUBO>() as vk::DeviceSize,
         };
         let camera_buffer_memory = unsafe {
             let mem_requirements = unsafe {
