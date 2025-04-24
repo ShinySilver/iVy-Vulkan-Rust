@@ -1,3 +1,5 @@
+use crate::contree::Node;
+
 pub struct MemoryPool<T: Default + Copy> {
     memory: Vec<T>,
     holes: [Vec<usize>; 64],
@@ -75,12 +77,14 @@ impl<T: Default + Copy> MemoryPool<T> {
         assert!(index + count <= self.memory.len(), "Invalid index!");
         &mut self.memory[index..index + count]
     }
+
+    pub fn raw(&self) -> &Vec<T> { &self.memory }
 }
 
 impl<T: Default + Copy> Default for MemoryPool<T> {
     fn default() -> Self {
         Self {
-            memory: Vec::with_capacity(4096),
+            memory: Vec::with_capacity(1024 * 1024 * 512),
             holes: core::array::from_fn(|_| Vec::new()),
         }
     }

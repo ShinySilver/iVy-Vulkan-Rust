@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
-struct Node {
+pub(crate) struct Node {
     bitmask: u64,
     data: u32,
 }
@@ -19,7 +19,7 @@ impl Node {
 }
 
 pub struct ConTree<T: Default + Copy + PartialEq + Display> {
-    nodes: MemoryPool<Node>,
+    pub(crate) nodes: MemoryPool<Node>,
     voxels: MemoryPool<T>,
     root_index: usize,
     tree_depth: usize,
@@ -63,13 +63,11 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
                     .voxels
                     .acquire_mut(node.children_index() + child_local_index);
                 *target = voxel;
-                println!();
                 return;
             }
         }
         let (new_voxel, _) = self.create_voxel_child(target_node_index, child_xyz);
         *new_voxel = voxel;
-        println!();
     }
 
     pub fn get_voxel(&self, pos: UVec3) -> T {

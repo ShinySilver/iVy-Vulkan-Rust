@@ -6,7 +6,9 @@ use std::ffi::CStr;
 use log::{debug, info, warn, error};
 use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
 use crate::camera::{Camera, Projection};
+use crate::contree::Node;
 
 pub struct Renderer {
     // Core Vulkan
@@ -39,6 +41,11 @@ pub struct Renderer {
     camera_buffer: vk::Buffer,
     camera_buffer_memory: vk::DeviceMemory,
     camera_mapped_ptr: *mut CameraUBO,
+
+    // 64-tree buffer
+    node_buffer: vk::Buffer,
+    node_buffer_memory: vk::DeviceMemory,
+    node_count: usize,
 
     // Descriptors
     descriptor_pool: vk::DescriptorPool,
@@ -99,7 +106,7 @@ pub struct CameraUBO {
 }
 
 impl Renderer {
-    pub fn new(window: &Window) -> Self {
+    pub fn new(window: &Window, nodes: &Vec<Node>) -> Self {
         let entry = ash::Entry::linked();
 
         // 1. Create instance
@@ -195,7 +202,7 @@ impl Renderer {
         // 8. Swapchain loader
         let swapchain_loader = khr::swapchain::Device::new(&instance, &device);
 
-        // 9. Command pool and buffers
+        // 9. Command pool and command buffers
         let command_pool_info = vk::CommandPoolCreateInfo::default()
             .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
@@ -231,11 +238,6 @@ impl Renderer {
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
             device.create_buffer(&buffer_info, None)
                 .expect("Failed to create camera buffer")
-        };
-        let buffer_info = vk::DescriptorBufferInfo {
-            buffer: camera_buffer,
-            offset: 0,
-            range: size_of::<CameraUBO>() as vk::DeviceSize,
         };
         let camera_buffer_memory = unsafe {
             let mem_requirements = unsafe {
@@ -273,6 +275,41 @@ impl Renderer {
             ).expect("Failed to map buffer memory") as *mut CameraUBO
         };
 
+        // 12. Creating buffers for contree
+        let buffer_size = (nodes.len() * size_of::<Node>()) as vk::DeviceSize;
+        let (staging_buffer, staging_memory) = Renderer::create_buffer(
+            &device,
+            &memory_properties,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+
+        // Copy data to staging buffer
+        unsafe {
+            let data_ptr = device
+                .map_memory(staging_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
+                .expect("Failed to map staging buffer memory") as *mut Node;
+            data_ptr.copy_from_nonoverlapping(nodes.as_ptr(), nodes.len());
+            device.unmap_memory(staging_memory);
+        }
+
+        // Create device local buffer
+        let (node_buffer, node_buffer_memory) = Renderer::create_buffer(
+            &device,
+            &memory_properties,
+            buffer_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        // Copy staging data to local buffer
+        Renderer::copy_buffer(&device, command_pool, queue, staging_buffer, node_buffer, buffer_size);
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_memory, None);
+        }
+
         // 12. Descriptor set layout
         let layout_binding = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -283,7 +320,12 @@ impl Renderer {
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE), ];
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),];
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(&layout_binding);
         let descriptor_set_layout = unsafe {
@@ -438,6 +480,9 @@ impl Renderer {
             camera_buffer,
             camera_buffer_memory,
             camera_mapped_ptr,
+            node_buffer,
+            node_buffer_memory,
+            node_count: nodes.len(),
             descriptor_pool: vk::DescriptorPool::null(),
             descriptor_set_layout,
             compute_descriptor_set: vk::DescriptorSet::null(),
@@ -563,6 +608,84 @@ impl Renderer {
 }
 
 impl Renderer {
+    fn create_buffer(
+        device: &ash::Device,
+        memory_properties: &vk::PhysicalDeviceMemoryProperties,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        properties: vk::MemoryPropertyFlags,
+    ) -> (vk::Buffer, vk::DeviceMemory) {
+        let buffer_info = vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { device.create_buffer(&buffer_info, None).unwrap() };
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+        let memory_type_index = memory_properties.memory_types.iter().enumerate()
+            .find(|(i, mem_type)| {
+                (mem_requirements.memory_type_bits & (1u32 << i)) != 0 &&
+                    mem_type.property_flags.contains(properties)
+            })
+            .map(|(i, _)| i as u32)
+            .expect("Failed to find suitable memory type");
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_requirements.size)
+            .memory_type_index(memory_type_index);
+
+        let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None).unwrap() };
+
+        unsafe {
+            device.bind_buffer_memory(buffer, buffer_memory, 0).unwrap();
+        }
+
+        (buffer, buffer_memory)
+    }
+
+    fn copy_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        src: vk::Buffer,
+        dst: vk::Buffer,
+        size: vk::DeviceSize,
+    ) {
+        let command_buffer_alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe {
+            device.allocate_command_buffers(&command_buffer_alloc_info)
+                .unwrap()[0]
+        };
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(command_buffer, &begin_info).unwrap();
+            let copy_region = vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size,
+            };
+            device.cmd_copy_buffer(command_buffer, src, dst, &[copy_region]);
+            device.end_command_buffer(command_buffer).unwrap();
+
+            let binding = [command_buffer];
+            let submit_info = vk::SubmitInfo::default()
+                .command_buffers(&binding);
+
+            device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null()).unwrap();
+            device.queue_wait_idle(graphics_queue).unwrap();
+            device.free_command_buffers(command_pool, &[command_buffer]);
+        }
+    }
+
+
     fn recreate_swapchain(&mut self, window: &Window) {
         let surface_caps = unsafe {
             self.surface_loader
@@ -768,7 +891,7 @@ impl Renderer {
         }];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(2);
+            .max_sets(3);
         let descriptor_pool =
             unsafe { self.device.create_descriptor_pool(&pool_info, None).unwrap() };
 
@@ -784,10 +907,15 @@ impl Renderer {
             image_layout: vk::ImageLayout::GENERAL,
             sampler: vk::Sampler::null(),
         }];
-        let buffer_info = vk::DescriptorBufferInfo {
+        let camera_buffer_info = vk::DescriptorBufferInfo {
             buffer: self.camera_buffer,
             offset: 0,
             range: size_of::<CameraUBO>() as vk::DeviceSize,
+        };
+        let node_buffer_info = vk::DescriptorBufferInfo {
+            buffer: self.node_buffer,
+            offset: 0,
+            range: (self.node_count * size_of::<Node>()) as vk::DeviceSize,
         };
         for &set in &descriptor_sets {
             let write = [
@@ -797,10 +925,15 @@ impl Renderer {
                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                     .image_info(&image_info),
                 vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_sets[0])
+                    .dst_set(set)
                     .dst_binding(1)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(std::slice::from_ref(&buffer_info))
+                    .buffer_info(std::slice::from_ref(&camera_buffer_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&node_buffer_info)),
             ];
             unsafe { self.device.update_descriptor_sets(&write, &[]) };
         }
@@ -931,7 +1064,6 @@ impl Renderer {
     }
 }
 
-#[cfg(debug_assertions)]
 unsafe extern "system" fn vulkan_debug_utils_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,

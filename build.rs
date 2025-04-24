@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, process};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -10,6 +10,7 @@ fn main() {
     let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.set_optimization_level(shaderc::OptimizationLevel::Performance);
+    options.set_warnings_as_errors();
 
     for entry in WalkDir::new(shader_dir)
         .into_iter()
@@ -34,7 +35,10 @@ fn main() {
 
         let compiled_result = compiler
             .compile_into_spirv(&source, shader_kind, filename, "main", Some(&options))
-            .expect(&format!("Failed to compile shader: {}", filename));
+            .unwrap_or_else(|e| {
+                eprintln!("Could not compile {filename}: {e}");
+                process::exit(1);
+            });
 
         let spv_path = out_dir.join(format!("{}.spv", filename));
         fs::write(&spv_path, compiled_result.as_binary_u8())
