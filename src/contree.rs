@@ -5,8 +5,8 @@ use std::fmt::Display;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub(crate) struct Node {
-    bitmask: u64,
-    data: u32,
+    pub bitmask: u64,
+    pub data: u32,
 }
 
 impl Node {
@@ -48,7 +48,7 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
             let child_width = 0x1u32 << (self.tree_depth - stack.len()) * 2;
             let child_local_pos = (pos & (child_width * 4 - 1)) / child_width;
             let child_xyz = child_local_pos.dot(UVec3::new(1, 4, 16));
-            let (_, index) = self.create_node_child(*stack.last().unwrap(), child_xyz);
+            let (_, index) = self.create_node_child(*stack.last().unwrap(), child_xyz, stack.len());
             stack.push(index);
         }
         let target_node_index = *stack.last().unwrap();
@@ -93,7 +93,7 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
         unimplemented!()
     }
 
-    fn create_node_child(&mut self, parent_index: usize, child_xyz: u32) -> (&mut Node, usize) {
+    fn create_node_child(&mut self, parent_index: usize, child_xyz: u32, stack_depth: usize) -> (&mut Node, usize) {
         let parent = *self.nodes.acquire(parent_index);
         assert_eq!(
             parent.bitmask & (0x1u64 << child_xyz),
@@ -122,7 +122,9 @@ impl<T: Default + Copy + PartialEq + Display> ConTree<T> {
             parent.bitmask |= 0x1u64 << child_xyz;
             parent.data = parent.data & (0x1u32 << 31) | (new_child_array_index as u32);
         }
-        (self.nodes.acquire_mut(new_child_index), new_child_index)
+        let new_child = self.nodes.acquire_mut(new_child_index);
+        if stack_depth + 1 == self.tree_depth { new_child.data |= 1u32 << 30; }
+        (new_child, new_child_index)
     }
 
     fn create_voxel_child(&mut self, parent_index: usize, child_xyz: u32) -> (&mut T, usize) {

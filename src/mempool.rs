@@ -79,6 +79,8 @@ impl<T: Default + Copy> MemoryPool<T> {
     }
 
     pub fn raw(&self) -> &Vec<T> { &self.memory }
+
+    pub fn raw_mut(&mut self) -> &mut Vec<T> { &mut self.memory }
 }
 
 impl<T: Default + Copy> Default for MemoryPool<T> {

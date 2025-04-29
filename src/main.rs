@@ -17,7 +17,7 @@ mod camera;
 mod contree;
 mod mempool;
 mod renderer;
-mod renderer_v2;
+mod gui;
 
 use crate::contree::ConTree;
 
@@ -75,7 +75,7 @@ fn main() {
     let mut renderer = renderer::Renderer::new(&window, tree.nodes.raw());
     let mut camera = camera::Camera::new(
         glam::Vec3::new(0.0, 1.0, 5.0),
-        glam::Vec3::ZERO,
+        glam::Vec3::X,
         glam::Vec3::Y,
     );
     let mut projection = camera::Projection::new(45.0_f32.to_radians(), 0.1, 100.0);
@@ -99,7 +99,7 @@ fn main() {
                 _ => (),
             },
             Event::AboutToWait => {
-                camera.update(&input_helper);
+                camera.update(&window, &input_helper);
                 renderer.draw(&window, &projection, &camera)
             }
             _ => (),

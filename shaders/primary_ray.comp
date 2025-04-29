@@ -5,8 +5,10 @@ layout (local_size_x = 16, local_size_y = 16) in;
 #define NODE_WIDTH 4
 #define NODE_WIDTH_SQRT 2
 #define WORLD_WIDTH 1024
-#define MINI_STEP_SIZE 5e-3f
-#define MICRO_STEP_SIZE 45e-3f
+
+#define EPSILON 1e-6f
+#define MINI_STEP_SIZE 1e-2f
+#define MICRO_STEP_SIZE 1e-3f
 
 struct Node {
     uint bitmask_low;
@@ -20,7 +22,7 @@ layout (set = 0, binding = 1) uniform CameraData {
     mat4 invView;
     mat4 invProj;
 } camera;
-layout (set = 0, binding = 2) buffer Nodes {
+layout (std430, set = 0, binding = 2) buffer Nodes {
     Node node_pool[];
 };
 
@@ -71,6 +73,10 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
     Node current_node = node_pool[current_node_index];
     stack[depth] = current_node_index;
 
+    // step limit
+    uint step_count = 0;
+    uint max_step_count = 256;
+
     // Doing the actual traversal!
     do {
         /**
@@ -80,20 +86,23 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
             // check hit
             uvec3 v = (uvec3(ray_pos) & (node_width * NODE_WIDTH - 1u)) >> findMSB(node_width);
             bitmask_index = v.x + (v.z << NODE_WIDTH_SQRT) + (v.y << NODE_WIDTH);
-            has_collided = (((bitmask_index < 32) ? current_node.bitmask_low : current_node.bitmask_high) & (1u << (bitmask_index & 31))) != 0; // 3.30 -> 3.23
+            has_collided = (((bitmask_index < 32) ? current_node.bitmask_low : current_node.bitmask_high) & (1u << (bitmask_index & 31))) != 0;
             if (has_collided) break;
 
             // dda step, normal extraction, and mini-step
             vec3 side_dist = inverted_ray_dir * (node_width * ray_sign_01 - mod(ray_pos, node_width));
-            float ray_step = min(min(side_dist.x, side_dist.y), side_dist.z);
+            float ray_step = max(min(min(side_dist.x, side_dist.y), side_dist.z), 10);
             step_mask = vec3(equal(ray_step.xxx, side_dist));
             ray_pos += ray_dir * ray_step + MINI_STEP_SIZE * ray_sign_11 * step_mask;
 
             // check bbox
             exited_local = any(greaterThanEqual(ray_pos, lbmax)) || any(lessThan(ray_pos, lbmin));
             exited_global = any(greaterThanEqual(ray_pos, bmax)) || any(lessThan(ray_pos, bmin));
-        } while (!has_collided && !exited_local && !exited_global);
 
+            // increment step count
+            step_count += 1;
+            if(step_count > max_step_count) return 3;
+        } while (!has_collided && !exited_local && !exited_global);
         /**
          * First possible reason for exiting the DDA main loop: we hit something, so we need to either go down or return a color
          */
@@ -101,6 +110,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
             do {
                 // if there is a hit on a voxel in a terminal node: return hit color
                 if ((current_node.header & (0x1u << 30)) != 0) {
+                    return 3;
                     bool is_lod = bool((current_node.header & (0x1u << 31)) != 0u);
                     uint color_index = is_lod ? (current_node.header & ~(0x3u << 30)) : 1;
                     ray_pos -= vec3(MINI_STEP_SIZE) * ray_sign_11;
@@ -137,6 +147,9 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
          */
         else if (exited_local && !exited_global) {
             do {
+                // quick check to prevent accidents
+                if(depth==0) return 1;
+
                 // go up
                 current_node_index = stack[depth];
                 current_node = node_pool[current_node_index];
@@ -160,26 +173,29 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
 /**
  * Doing some maths to get the ray dir given the camera position, direction, and the target pixel on-screen coordinates
  */
-vec3 getRayDir(ivec2 screen_position) {
+vec3 get_ray_dir(ivec2 screen_position) {
     ivec2 screen_size = imageSize(img);
     vec2 screen_space = ((screen_position + vec2(0.5)) / screen_size).xy;
     screen_space.y = 1.0 - screen_space.y;
     vec4 clip_space = vec4(screen_space * 2.0f - 1.0f, -1.0, 1.0);
     vec4 eye_space = vec4(vec2(camera.invProj * clip_space), -1.0, 0.0);
-    return normalize(vec3(camera.invView * eye_space));
+    vec3 ray_dir = normalize(vec3(camera.invView * eye_space));
+    return ray_dir;
+    vec3 is_small = step(abs(ray_dir), vec3(EPSILON)); // 1.0 if |dir| < EPSILON
+    return ray_dir + is_small * EPSILON * sign(ray_dir + 0.5); // nudge
 }
 
 /**
  * Our voxel color table
  */
 const vec3 colors[] = {
-vec3(0.69, 0.88, 0.90), // SKY_BLUE
-vec3(1.00, 0.40, 0.40), // DEBUG_RED
-vec3(0.40, 1.00, 0.40), // DEBUG_GREEN
-vec3(0.40, 0.40, 1.00), // DEBUG_BLUE
-vec3(0.55, 0.55, 0.55), // STONE
-vec3(0.42, 0.32, 0.25), // DIRT
-vec3(0.30, 0.59, 0.31)  // GRASS
+    vec3(0.69, 0.88, 0.90), // SKY_BLUE
+    vec3(1.00, 0.40, 0.40), // DEBUG_RED
+    vec3(0.40, 1.00, 0.40), // DEBUG_GREEN
+    vec3(0.40, 0.40, 1.00), // DEBUG_BLUE
+    vec3(0.55, 0.55, 0.55), // STONE
+    vec3(0.42, 0.32, 0.25), // DIRT
+    vec3(0.30, 0.59, 0.31)  // GRASS
 };
 
 /**
@@ -191,7 +207,7 @@ void main() {
     if (any(greaterThanEqual(gl_GlobalInvocationID.xy, screen_size))) return;
 
     // get the ray direction for the current pixel
-    const vec3 ray_dir = getRayDir(ivec2(gl_GlobalInvocationID.xy));
+    const vec3 ray_dir = get_ray_dir(ivec2(gl_GlobalInvocationID.xy));
 
     // primary ray
     vec3 ray_pos = camera.position.xyz;
@@ -199,11 +215,11 @@ void main() {
     vec3 voxel_color = colors[voxel_index].xyz;
 
     // secondary ray with fixed sun direction
-    const vec3 sun_direction = normalize(vec3(0.4, 0.4, 1.0));
+    /*const vec3 sun_direction = normalize(vec3(0.4, 0.4, 1.0));
     if (voxel_index != 0) {
         uint sun_voxel_index = raytrace(ray_pos, sun_direction);
         if (sun_voxel_index != 0) voxel_color *= 0.5; // Reduced brightness for shadows
-    }
+    }*/
 
     // writing to the framebuffer
     imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(voxel_color, 0));

@@ -1,5 +1,7 @@
 use glam;
+use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
+use winit::window::{CursorGrabMode, Window};
 use winit_input_helper::WinitInputHelper;
 
 pub struct Camera {
@@ -7,6 +9,7 @@ pub struct Camera {
     pub forward: glam::Vec3,
     pub up: glam::Vec3,
     matrix: glam::Mat4,
+    is_cursor_locked: bool,
 }
 
 impl Camera {
@@ -16,14 +19,17 @@ impl Camera {
             forward,
             up,
             matrix: glam::Mat4::IDENTITY,
+            is_cursor_locked: false,
         }
     }
     pub fn view_matrix(&self) -> glam::Mat4 {
         self.matrix
     }
-    pub fn update(&mut self, input_helper: &WinitInputHelper) {
+    pub fn update(&mut self, window: &Window, input_helper: &WinitInputHelper) {
         let right = self.forward.cross(self.up).normalize();
-        let speed = 0.1;
+        let speed = if input_helper.held_shift() { 10.0 } else { 1.0 };
+
+        // WASD movement
         if input_helper.key_held(KeyCode::KeyW) {
             self.position += self.forward * speed;
         }
@@ -36,12 +42,52 @@ impl Camera {
         if input_helper.key_held(KeyCode::KeyD) {
             self.position += right * speed;
         }
+
+        // Up/Down
         if input_helper.key_held(KeyCode::Space) {
             self.position += self.up * speed;
         }
-        if input_helper.held_shift() {
+        if input_helper.key_held(KeyCode::ControlLeft) {
             self.position -= self.up * speed;
         }
+
+        // Mouse lock / unlock
+        if input_helper.mouse_pressed(MouseButton::Left) {
+            window.set_cursor_grab(CursorGrabMode::Confined).unwrap();
+            window.set_cursor_visible(false);
+            self.is_cursor_locked = true;
+        }
+        if input_helper.held_alt() && self.is_cursor_locked {
+            window.set_cursor_grab(CursorGrabMode::None).unwrap();
+            window.set_cursor_visible(true);
+            self.is_cursor_locked = false;
+        }
+
+        // Mouse movement
+        if self.is_cursor_locked {
+            let (delta_x, delta_y) = input_helper.mouse_diff();
+            if delta_x != 0f32 || delta_y != 0f32 {
+                let sensitivity = 0.002;
+
+                // Rotate horizontally around the global Y axis (yaw)
+                let yaw = glam::Quat::from_axis_angle(self.up, -delta_x as f32 * sensitivity);
+                self.forward = (yaw * self.forward).normalize();
+
+                // Rotate vertically around the right axis (pitch)
+                let right = self.forward.cross(self.up).normalize();
+                let pitch = glam::Quat::from_axis_angle(right, -delta_y as f32 * sensitivity);
+
+                let new_forward = (pitch * self.forward).normalize();
+
+                // Limit pitch to prevent flipping
+                let dot = new_forward.dot(self.up);
+                if dot.abs() < 0.99 {
+                    self.forward = new_forward;
+                }
+            }
+        }
+
+        // Creating the view matrix
         self.matrix = glam::Mat4::look_at_rh(self.position, self.position + self.forward, self.up);
     }
 }
