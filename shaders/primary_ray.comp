@@ -4,7 +4,7 @@ layout (local_size_x = 16, local_size_y = 16) in;
 #define SIZEOF_NODE 12
 #define NODE_WIDTH 4
 #define NODE_WIDTH_SQRT 2
-#define WORLD_WIDTH 1024
+#define WORLD_WIDTH 4096
 
 #define EPSILON 1e-6f
 #define MINI_STEP_SIZE 1e-2f
@@ -39,6 +39,7 @@ float AABBIntersect(vec3 bmin, vec3 bmax, vec3 orig, vec3 invdir, out vec3 aabb_
     aabb_mask = step(vmin, vec3(tmin));
     return max(0.0, tmin);
 }
+
 
 /**
  * Our raytracing function
@@ -91,7 +92,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
 
             // dda step, normal extraction, and mini-step
             vec3 side_dist = inverted_ray_dir * (node_width * ray_sign_01 - mod(ray_pos, node_width));
-            float ray_step = max(min(min(side_dist.x, side_dist.y), side_dist.z), 10);
+            float ray_step = min(min(side_dist.x, side_dist.y), side_dist.z);
             step_mask = vec3(equal(ray_step.xxx, side_dist));
             ray_pos += ray_dir * ray_step + MINI_STEP_SIZE * ray_sign_11 * step_mask;
 
@@ -101,7 +102,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
 
             // increment step count
             step_count += 1;
-            if(step_count > max_step_count) return 3;
+            if(step_count > max_step_count) return 1;
         } while (!has_collided && !exited_local && !exited_global);
         /**
          * First possible reason for exiting the DDA main loop: we hit something, so we need to either go down or return a color
@@ -109,19 +110,20 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
         if (has_collided) {
             do {
                 // if there is a hit on a voxel in a terminal node: return hit color
-                if ((current_node.header & (0x1u << 30)) != 0) {
-                    return 3;
-                    bool is_lod = bool((current_node.header & (0x1u << 31)) != 0u);
-                    uint color_index = is_lod ? (current_node.header & ~(0x3u << 30)) : 1;
+                if ((current_node.header & (0x1u << 31)) != 0) {
                     ray_pos -= vec3(MINI_STEP_SIZE) * ray_sign_11;
-                    return color_index;
+                    return 4;
+                    //bool is_lod = bool((current_node.header & (0x1u << 31)) != 0u);
+                    //uint color_index = is_lod ? (current_node.header & ~(0x3u << 30)) : 1;
+                    //
+                    //return color_index;
                 }
 
                 // if we get a hit on a non-empty node, we lookup its node index to know where to descend to
                 uint filtered_low, filtered_high;
                 if (bitmask_index < 32) { filtered_low = current_node.bitmask_low & ((1u << bitmask_index) - 1u); filtered_high = 0u; }
                 else { filtered_low = current_node.bitmask_low; filtered_high = current_node.bitmask_high & ((1u << (bitmask_index - 32)) - 1u); }
-                uint hit_index = uint(bitCount(filtered_low) + bitCount(filtered_high)) + uint((current_node.header & ~(0x3u << 30)) / SIZEOF_NODE);
+                uint hit_index = uint(bitCount(filtered_low) + bitCount(filtered_high)) + uint((current_node.header & ~(0x1u << 31)));
 
                 // going down
                 depth += 1;
@@ -215,11 +217,11 @@ void main() {
     vec3 voxel_color = colors[voxel_index].xyz;
 
     // secondary ray with fixed sun direction
-    /*const vec3 sun_direction = normalize(vec3(0.4, 0.4, 1.0));
-    if (voxel_index != 0) {
-        uint sun_voxel_index = raytrace(ray_pos, sun_direction);
-        if (sun_voxel_index != 0) voxel_color *= 0.5; // Reduced brightness for shadows
-    }*/
+    //const vec3 sun_direction = normalize(vec3(0.4, 0.4, 1.0));
+    //if (voxel_index != 0) {
+    //    uint sun_voxel_index = raytrace(ray_pos, sun_direction);
+    //    if (sun_voxel_index != 0) voxel_color *= 0.5; // Reduced brightness for shadows
+    //}
 
     // writing to the framebuffer
     imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(voxel_color, 0));

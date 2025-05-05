@@ -702,7 +702,7 @@ impl Renderer {
             }
             _ => surface_caps.current_extent,
         };
-        let present_mode = vk::PresentModeKHR::FIFO;
+        let present_mode = vk::PresentModeKHR::MAILBOX;
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
             .min_image_count(self.image_count)

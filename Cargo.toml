@@ -3,6 +3,10 @@ name = "iVy"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+debug-view = ["show-image"]
+
 [profile.dev]
 opt-level = 1
 
@@ -17,11 +21,15 @@ winit = "0.29.15"
 winit_input_helper = "0.16.0"
 ash = { version = "0.38.0", features = ["linked"] }
 ash-window = "0.13.0"
+half = "2.6.0"
+imgui = "0.12.0"
+imgui-rs-vulkan-renderer = "1.16.0"
 raw-window-handle = "0.6.2"
 log = "0.4.27"
 env_logger = "0.11.8"
 glam = "0.30.1"
 fastnoise2 = "0.3.1"
+show-image = { version = "0.14.1", optional = true }
 
 [build-dependencies]
 shaderc = "0.8"
