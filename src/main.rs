@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use fastnoise2::generator::{Generator, prelude::*};
+use fastnoise2::generator::{prelude::*, Generator};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::event::{Event, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -14,13 +14,12 @@ use glam::UVec3;
 use log::info;
 
 mod camera;
-mod contree;
-mod mempool;
 mod renderer;
-mod world;
 mod worldgen;
+mod utils;
+pub mod world;
 
-use crate::contree::Contree;
+use crate::utils::sparse_tree::*;
 
 fn main() {
     // Creating the logger
@@ -63,7 +62,7 @@ fn main() {
 
     // Creating a 64-tree for the world
     let start = Instant::now();
-    let mut tree = Contree::new(WORLD_DEPTH as usize);
+    let mut tree = SparseTree::new(WORLD_DEPTH as usize);
     for x in 0..WORLD_WIDTH {
         for y in 0..WORLD_WIDTH {
             let z = world_heightmap[(x + y * WORLD_WIDTH) as usize] as u32;
@@ -81,6 +80,9 @@ fn main() {
         glam::Vec3::Y,
     );
     let mut projection = camera::Projection::new(45.0_f32.to_radians(), 0.1, 100.0);
+
+    // WIP worldgen
+    let bwak = World::new(5, 158963258);
 
     // Main loop
     let mut frame_count = 0u32;

@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-debug-view = ["show-image"]
+debug-view = [] #["show-image"]
 
 [profile.dev]
 opt-level = 1
@@ -14,7 +14,7 @@ opt-level = 1
 inherits = "release"
 lto = "fat"
 strip = "symbols"
-codegen-units=1
+codegen-units = 1
 
 [dependencies]
 winit = "0.29.15"
@@ -29,7 +29,10 @@ log = "0.4.27"
 env_logger = "0.11.8"
 glam = "0.30.1"
 fastnoise2 = "0.3.1"
-show-image = { version = "0.14.1", optional = true }
+kiddo = "5.0.3"                     # KD-Tree used for fast K-nearest, enabling biome lookup
+fast_poisson = "1.0.2"              # Used to place biomes without grid
+image = "0.25.6"                   # Used to create biome images
+opener = "0.7.2"                    # Used to open biome images after their creation
 
 [build-dependencies]
 shaderc = "0.8"

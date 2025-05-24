@@ -8,7 +8,7 @@ use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::{Camera, Projection};
-use crate::contree::Node;
+use crate::sparse_tree::Node;
 
 pub struct Renderer {
     // Core Vulkan
@@ -702,7 +702,7 @@ impl Renderer {
             }
             _ => surface_caps.current_extent,
         };
-        let present_mode = vk::PresentModeKHR::MAILBOX;
+        let present_mode = vk::PresentModeKHR::FIFO;
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
             .min_image_count(self.image_count)

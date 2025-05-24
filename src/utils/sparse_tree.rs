@@ -1,4 +1,4 @@
-use crate::mempool::MemoryPool;
+use crate::utils::memory_pool::MemoryPool;
 use glam::UVec3;
 
 #[repr(packed)]
@@ -17,19 +17,19 @@ impl Node {
     }
 }
 
-pub struct Contree<T: Default + Copy + PartialEq> {
+pub struct SparseTree<T: Default + Copy + PartialEq> {
     pub(crate) nodes: MemoryPool<Node>,
     voxels: MemoryPool<T>,
     root_index: usize,
     tree_depth: usize,
 }
 
-impl<T: Default + Copy + PartialEq> Contree<T> {
+impl<T: Default + Copy + PartialEq> SparseTree<T> {
     pub fn new(tree_depth: usize) -> Self {
         assert!(tree_depth > 0, "Invalid tree_depth");
         let mut nodes = MemoryPool::default();
         let (_, root_index) = nodes.allocate();
-        Contree {
+        SparseTree {
             nodes,
             voxels: MemoryPool::default(),
             root_index,
@@ -184,11 +184,11 @@ impl<T: Default + Copy + PartialEq> Contree<T> {
     }
 }
 
-impl<T: Default + Copy + PartialEq> Default for Contree<T> {
+impl<T: Default + Copy + PartialEq> Default for SparseTree<T> {
     fn default() -> Self {
         let mut nodes = MemoryPool::default();
         let (_, root_index) = nodes.allocate();
-        Contree {
+        SparseTree {
             nodes,
             voxels: MemoryPool::default(),
             root_index,
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_default_voxel_value() {
-        let tree = Contree::<u8>::default();
+        let tree = SparseTree::<u8>::default();
         assert_eq!(tree.get(UVec3::new(0, 0, 0)), u8::default());
         assert_eq!(tree.get(UVec3::new(10, 10, 10)), u8::default());
         assert_eq!(tree.get(UVec3::new(3, 3, 3)), u8::default());
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_set_and_get_voxel() {
-        let mut tree = Contree::<u8>::default();
+        let mut tree = SparseTree::<u8>::default();
         let pos = UVec3::new(1, 2, 3);
 
         tree.set(pos, 42);
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_set_multiple_voxels() {
-        let mut tree = Contree::<u8>::default();
+        let mut tree = SparseTree::<u8>::default();
 
         tree.set(UVec3::new(1, 1, 1), 10);
         tree.set(UVec3::new(2, 2, 2), 20);
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_chunk_boundary_voxel() {
-        let mut tree = Contree::<u8>::default();
+        let mut tree = SparseTree::<u8>::default();
 
         // Set a voxel at the boundary of a chunk (4x4x4)
         let pos = UVec3::new(3, 3, 3);
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_no_modulo_wrapping() {
-        let mut tree = Contree::<u8>::default();
+        let mut tree = SparseTree::<u8>::default();
 
         // Set voxel at (0, 0, 0)
         tree.set(UVec3::new(0, 0, 0), 100);
