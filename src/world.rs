@@ -1,56 +1,30 @@
-use std::cmp::max;
-use std::ops::*;
-use std::time::Instant;
-use fastnoise2::generator::{Generator, GeneratorWrapper};
-use fastnoise2::generator::prelude::opensimplex2;
+use fastnoise2::generator::*;
 use fastnoise2::SafeNode;
-use glam::{uvec2, vec2, UVec2, UVec3, Vec2};
-use half::f16;
+use glam::{uvec2, uvec3, vec2, UVec2, UVec3};
 use log::{info, warn};
-use crate::sparse_tree::SparseTree;
-use crate::worldgen::grid::Grid;
-use crate::worldgen::image::ImageF16;
+use crate::utils::image::Img;
+use crate::utils::image_transforms;
+use crate::utils::sparse_bitmask::SparseBitmask;
+use crate::utils::sparse_tree::{Node, SparseTree};
 
-type Voxel = u8;
-
-#[derive(Default, Copy, Clone, PartialEq)]
-struct ChunkMeta {
-    is_generated: u64,
-}
-
-#[derive(Default)]
-struct MetadataStorage {
-    metadata: SparseTree<ChunkMeta>,
-}
-
-impl MetadataStorage {
-    fn is_generated(&self, pos: UVec3) -> bool {
-        let chunk_coords = pos / 4;
-        let bit_index = (pos % UVec3::new(1, 4, 16)).element_sum();
-        self.metadata.get(chunk_coords).is_generated & (0x1u64 << bit_index) != 0
-    }
-
-    fn set_generated(&mut self, pos: UVec3) {
-        let chunk_coords = pos / 4;
-        let bitmask = 0x1u64 << (pos % UVec3::new(1, 4, 16)).element_sum();
-        match self.metadata.get_mut(chunk_coords) {
-            None => { self.metadata.set(pos, ChunkMeta { is_generated: bitmask }); }
-            Some(chunk_meta) => { chunk_meta.is_generated |= bitmask; }
-        }
-    }
-}
-
-#[derive(Default, Clone)]
-struct Biome {
-    height: f32,
+#[repr(u8)]
+enum Voxel {
+    Air,
+    DebugRed,
+    DebugGreen,
+    DebugBlue,
+    Stone,
+    Dirt,
+    Grass,
 }
 
 pub struct World {
-    /* Voxel data */
-    data: SparseTree<Voxel>,
+    /* Voxel data. The only data structure that is sent to the GPU. */
+    pub data: SparseTree<u8>,
 
-    /* Voxel metadata */
-    metadata: MetadataStorage,
+    /* Per-voxel metadata. Not sent to the GPU */
+    is_generated: SparseBitmask, // Used to differentiate "air" voxels from "not generated" voxels
+    // TODO: voxel entities, structures?
 
     /* World metadata */
     seed: u64,
@@ -58,73 +32,97 @@ pub struct World {
     depth: u32,
 
     /* World planning */
-    grid: Grid<Biome>,
+    bottom_heightmap: Img<f32>,
+    top_heightmap: Img<f32>,
 }
 
 impl World {
     pub fn new(depth: u32, seed: u64) -> Self {
         let mut world = World {
-            data: Default::default(),
-            metadata: Default::default(),
+            data: SparseTree::new(depth as usize),
+            is_generated: Default::default(),
             seed,
             width: 4u32.pow(depth),
             depth,
-            grid: Grid::new(4u32.pow(depth), (4u32.pow(depth) / 160u32), seed),
+            bottom_heightmap: Default::default(),
+            top_heightmap: Default::default(),
         };
         world.plan();
+        world.pre_generate();
         world
     }
+
+    pub(crate) fn raw_voxel_data(&self) -> &Vec<Node> { self.data.nodes.raw() }
+
     fn plan(&mut self) {
+        info!("width: {}", self.width);
         /* Generating a base heightmap */
+        let tree_code = "IgAAAABAAACAPxoAARsAGwAZABkAEwDNzEw+DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwAAAAAAAAAAgD8BHQAaAAAAAIA/ARwAAQUAAQAAAAAAAAAAAAAAAAAAAAAAAAAAMzPrQQAAAIA/AOxRGEAAMzMzQA==";
+        let node = SafeNode::from_encoded_node_tree(tree_code).unwrap();
+        let heightmap = Img::from_node(&node, self.width, 145902);
 
-        const SEED: i32 = 145896;
-        for i in 0..20 {
-            let heightmap = {
-                let mut world_heightmap = vec![0.0; self.width.pow(2) as usize];
-                let tree_code = "IgAAAABAAACAPxoAARsAGwAZABkAEwDNzEw+DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwAAAAAAAAAAgD8BHQAaAAAAAIA/ARwAAQUAAQAAAAAAAAAAAAAAAAAAAAAAAAAAMzPrQQAAAIA/AOxRGEAAMzMzQA==";
-                let node = SafeNode::from_encoded_node_tree(tree_code).unwrap();
+        /* Using it to build a hard continent shape */
+        let continent_shape = heightmap.map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } });
+        //continent_shape.to_file_and_show("continent_shape.png");
 
-                /**
-                 * Best seeds:
-                 *   145892
-                 *   145894
-                 *   ... ?
-                 */
-                let min_max = node.gen_uniform_grid_2d(&mut world_heightmap,
-                                                       self.width as i32 / -2, self.width as i32 / -2,
-                                                       self.width as i32, self.width as i32, 0.8e-2, SEED+i);
-                ImageF16 {
-                    width: self.width,
-                    data: world_heightmap.iter().map(|h| { f16::from_f32((h + 1.) / 2. * 255.) }).collect(),
-                }
-            };
-            let path = format!("heightmap_{}.png", i);
-            heightmap.to_u8(0., 1.).export(&path);
-        }
-        opener::open("heightmap_1.png").unwrap_or_else(|_| warn!("Failed to open {}", "heightmap_1.png"));
+        /* Building the bottom envelope */
+        let bottom_envelope = continent_shape.distance_transform().map(|_, _, h| { h * 2. });
+        //bottom_envelope.map(|x, y, v| { (v / 200. * 255.) as u8 }).to_file_and_show("dist_to_sea.png");
 
-        /*
-        /* Applying the heightmap to the biome map */
-        self.grid.apply(|i, pos: &UVec2, biome: &mut Biome| {
-            biome.height = heightmap.get(pos).to_f32()
-        });
-        self.grid.export("biome_heightmap_1.png", |biome| { [biome.height as u8; 3] });
+        /* Building a very simple top envelope */
+        let top_envelope = heightmap.map(|x, y, h| { (h + 1.) / 2. * 255. });
 
-        /* Apply a smooth circular mask */
-        self.grid.apply(|i, pos: &UVec2, biome: &mut Biome| {
-            let center_pos = pos.as_vec2() - self.width as f32 / 2.;
-            biome.height *= f32::min(1., 1. - 0.2 * center_pos.dot(center_pos) / (self.width / 4).pow(2) as f32);
-        });
-        self.grid.export("biome_heightmap_2.png", |biome| { [biome.height as u8; 3] });
-
-        /* Apply a threshold to get the continent shape */
-        let threshold = 50.;
-        self.grid.apply(|i, pos: &UVec2, biome: &mut Biome| {
-            if biome.height < threshold { biome.height = 0.0; }
-        });
-        self.grid.export("biome_heightmap_3.png", |biome| {
-            if biome.height != 0. { [biome.height as u8; 3] } else { [46, 139, 187] }
-        });*/
+        self.bottom_heightmap = bottom_envelope;
+        self.top_heightmap = top_envelope;
     }
-    fn generate(&mut self, coord: [f64; 2]) -> bool { false }
+
+    fn pre_generate(&mut self) {
+        let center_z = self.width / 2;
+
+        for x in 0..self.width {
+            for y in 0..self.width {
+                let pos = uvec2(x, y);
+                let height = *self.top_heightmap.get(pos) as u32;
+                let depth = *self.bottom_heightmap.get(pos) as u32;
+
+                // checking the min height and depth of the neighbors (x±1, y±1)
+                let mut min_neighbour_height = height;
+                let mut min_neighbour_depth = depth;
+                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let nx = x.wrapping_add(dx as u32);
+                    let ny = y.wrapping_add(dy as u32);
+                    if nx < self.width && ny < self.width {
+                        let n_height = *self.top_heightmap.get(uvec2(nx, ny)) as u32;
+                        let n_depth = *self.bottom_heightmap.get(uvec2(nx, ny)) as u32;
+                        min_neighbour_height = min_neighbour_height.min(n_height);
+                        min_neighbour_depth = min_neighbour_depth.min(n_depth);
+                    }
+                }
+
+                // No filling the void with a thin layer of stone
+                if height == 0 && depth == 0 && min_neighbour_height == 0 && min_neighbour_depth == 0 {
+                    continue; // skip this column entirely
+                }
+
+                // Fill from neighbor-based depth/height to current point to avoid holes
+                let top_start = center_z + min_neighbour_height;
+                let top_end = center_z + height;
+
+                for z in top_start..=top_end {
+                    self.data.set(uvec3(x, y, z), Voxel::Grass as u8);
+                }
+
+                let bottom_start = center_z - depth;
+                let bottom_end = center_z - min_neighbour_depth;
+
+                for z in bottom_start..=bottom_end {
+                    self.data.set(uvec3(x, y, z), Voxel::Stone as u8);
+                }
+            }
+        }
+    }
+
+    pub fn peek(&self, coord: UVec3) -> u8 { todo!() }
+
+    pub fn generate(&mut self, coord: UVec3) -> bool { todo!() }
 }

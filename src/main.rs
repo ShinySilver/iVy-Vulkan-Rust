@@ -15,11 +15,11 @@ use log::info;
 
 mod camera;
 mod renderer;
-mod worldgen;
 mod utils;
 pub mod world;
 
 use crate::utils::sparse_tree::*;
+use crate::world::World;
 
 fn main() {
     // Creating the logger
@@ -34,55 +34,17 @@ fn main() {
         .unwrap();
     let mut input_helper = WinitInputHelper::new();
 
-    // Creating a heightmap for the world
-    const NODE_WIDTH: u32 = 4;
-    const WORLD_DEPTH: u32 = 6;
-    const WORLD_WIDTH: u32 = NODE_WIDTH.pow(WORLD_DEPTH);
-    let mut world_heightmap = vec![0.0; WORLD_WIDTH.pow(2) as usize];
-    let node = opensimplex2()
-        .fbm(0.65, 0.5, 4, 2.5)
-        .domain_scale(0.066)
-        .domain_warp_gradient(0.2, 2.0)
-        .domain_warp_progressive(0.7, 0.5, 2, 2.5)
-        .mul(100.0)
-        .add(50.0)
-        .build();
-    let start = Instant::now();
-    let min_max = node.gen_uniform_grid_2d(
-        &mut world_heightmap,
-        0,
-        0,
-        WORLD_WIDTH as i32,
-        WORLD_WIDTH as i32,
-        0.02,
-        1337,
-    );
-    let elapsed = start.elapsed();
-    info!("Generated the {WORLD_WIDTH}x{WORLD_WIDTH} heightmap in {:?}", elapsed);
-
-    // Creating a 64-tree for the world
-    let start = Instant::now();
-    let mut tree = SparseTree::new(WORLD_DEPTH as usize);
-    for x in 0..WORLD_WIDTH {
-        for y in 0..WORLD_WIDTH {
-            let z = world_heightmap[(x + y * WORLD_WIDTH) as usize] as u32;
-            tree.set(UVec3 { x, y, z }, 1u8);
-        }
-    }
-    let elapsed = start.elapsed();
-    info!("Generated the {WORLD_WIDTH}x{WORLD_WIDTH}x{WORLD_WIDTH} 64-tree in {:?}", elapsed);
+    // Generating world
+    let world = World::new(5, 158963258);
 
     // Creating renderer & camera
-    let mut renderer = renderer::Renderer::new(&window, tree.nodes.raw());
+    let mut renderer = renderer::Renderer::new(&window, world.raw_voxel_data());
     let mut camera = camera::Camera::new(
         glam::Vec3::new(0.0, 1.0, 5.0),
         glam::Vec3::X,
         glam::Vec3::Y,
     );
     let mut projection = camera::Projection::new(45.0_f32.to_radians(), 0.1, 100.0);
-
-    // WIP worldgen
-    let bwak = World::new(5, 158963258);
 
     // Main loop
     let mut frame_count = 0u32;

@@ -8,70 +8,166 @@ use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::{Camera, Projection};
-use crate::sparse_tree::Node;
+use crate::utils::sparse_tree::Node;
 
 pub struct Renderer {
-    // Core Vulkan
+    // ----------------------------
+    // Vulkan Core Handles
+    // ----------------------------
+    /// Vulkan entry point (loaded dynamically)
     entry: ash::Entry,
+
+    /// Vulkan instance (represents the Vulkan context)
     instance: ash::Instance,
+
+    /// Logical device (interface to the GPU)
     device: ash::Device,
-    surface_loader: khr::surface::Instance,
-    surface: vk::SurfaceKHR,
-    surface_format: vk::Format,
+
+    /// Selected physical GPU
     physical_device: vk::PhysicalDevice,
+
+    /// Queue handle to submit commands
     queue: vk::Queue,
+
+    /// Index of the queue family that supports our needs (graphics/compute)
     queue_family_index: u32,
 
-    // Swapchain
+    // ----------------------------
+    // Surface (Window Integration)
+    // ----------------------------
+    /// Surface extension loader (interface between Vulkan and window system)
+    surface_loader: khr::surface::Instance,
+
+    /// The actual surface (window connection)
+    surface: vk::SurfaceKHR,
+
+    /// Format for displaying images to the surface (e.g., sRGB)
+    surface_format: vk::Format,
+
+    // ----------------------------
+    // Swapchain (Backbuffer Images)
+    // ----------------------------
+    /// Swapchain loader (interface to manage swapchain)
     swapchain_loader: khr::swapchain::Device,
+
+    /// Swapchain handle (set of images used for rendering/displaying)
     swapchain: vk::SwapchainKHR,
+
+    /// Images in the swapchain
     swapchain_images: Vec<vk::Image>,
+
+    /// Views of the swapchain images (like textures)
     swapchain_image_views: Vec<vk::ImageView>,
+
+    /// Resolution of the swapchain images
     swapchain_extent: vk::Extent2D,
+
+    /// Framebuffers for rendering to swapchain images
     framebuffers: Vec<vk::Framebuffer>,
+
+    /// Render pass used for graphics rendering
     render_pass: vk::RenderPass,
 
-    // Shared Image
+    // ----------------------------
+    // Storage Image (Compute Output Target)
+    // ----------------------------
+    /// Image that compute shader writes to
     storage_image: vk::Image,
+
+    /// Memory bound to the storage image
     storage_image_memory: vk::DeviceMemory,
+
+    /// View into the storage image (for shaders to access)
     storage_image_view: vk::ImageView,
+
+    /// Size of the storage image
     storage_image_extent: (u32, u32),
 
-    // Camera UBO
+    // ----------------------------
+    // Camera Uniform Buffer (UBO)
+    // ----------------------------
+    /// Uniform buffer for camera data (view/projection matrices)
     camera_buffer: vk::Buffer,
+
+    /// GPU memory for the camera buffer
     camera_buffer_memory: vk::DeviceMemory,
+
+    /// CPU-side pointer to mapped camera buffer (for updates)
     camera_mapped_ptr: *mut CameraUBO,
 
-    // 64-tree buffer
+    // ----------------------------
+    // Scene Data: 64-tree Buffer
+    // ----------------------------
+    /// GPU buffer for node data
     node_buffer: vk::Buffer,
+
+    /// Memory for the node buffer
     node_buffer_memory: vk::DeviceMemory,
+
+    /// Number of nodes in the tree
     node_count: usize,
 
-    // Descriptors
+    // ----------------------------
+    // Descriptor Sets & Layouts
+    // ----------------------------
+    /// Pool for allocating descriptor sets (GPU resource bindings)
     descriptor_pool: vk::DescriptorPool,
+
+    /// Layout describing bindings for compute shaders
     descriptor_set_layout: vk::DescriptorSetLayout,
+
+    /// Descriptor set used by compute shaders
     compute_descriptor_set: vk::DescriptorSet,
+
+    /// Descriptor set used by graphics shaders (optional)
     graphics_descriptor_set: vk::DescriptorSet,
 
-    // Pipelines
+    // ----------------------------
+    // Pipelines (Compute & Graphics)
+    // ----------------------------
+    /// Pipeline layout for compute shaders (descriptor bindings)
     compute_pipeline_layout: vk::PipelineLayout,
+
+    /// Compute pipeline (e.g., raytracing)
     compute_pipeline: vk::Pipeline,
+
+    /// Pipeline layout for graphics shaders
     graphics_pipeline_layout: vk::PipelineLayout,
+
+    /// Graphics pipeline (e.g., drawing a textured quad)
     graphics_pipeline: vk::Pipeline,
 
-    // Commands
+    // ----------------------------
+    // Command Buffers
+    // ----------------------------
+    /// Command pool for allocating command buffers
     command_pool: vk::CommandPool,
+
+    /// Command buffers for drawing frames
     command_buffers: Vec<vk::CommandBuffer>,
 
-    // Sync
+    // ----------------------------
+    // Synchronization Objects
+    // ----------------------------
+    /// Semaphore to signal when a swapchain image is ready
     image_available_semaphore: vk::Semaphore,
+
+    /// Fence to signal when rendering is complete
     in_flight_fence: vk::Fence,
 
-    // Frame
+    // ----------------------------
+    // Frame State
+    // ----------------------------
+    /// Index of the currently rendered image
     current_image_index: u32,
+
+    /// Number of images in the swapchain
     image_count: u32,
+
+    /// Flag to indicate the swapchain needs resizing
     needs_resize: bool,
 }
+
 
 macro_rules! load_shader_module {
     ($device:expr, $path:expr) => {{
@@ -107,9 +203,22 @@ pub struct CameraUBO {
 
 impl Renderer {
     pub fn new(window: &Window, nodes: &Vec<Node>) -> Self {
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 1. Load Vulkan Entry Point
+        // ─────────────────────────────────────────────────────────────
+        // Vulkan uses dynamic loading. The Entry object is our access to Vulkan functions.
+        //
         let entry = ash::Entry::linked();
 
-        // 1. Create instance
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 2. Create Vulkan Instance
+        // ─────────────────────────────────────────────────────────────
+        // The instance is the connection between our application and the Vulkan driver.
+        // We provide basic application info, extensions required for windowing,
+        // and enable validation layers for debugging.
+        //
         let app_info = vk::ApplicationInfo::default()
             .application_name(c"iVY")
             .application_version(0)
@@ -119,20 +228,27 @@ impl Renderer {
 
         let window_handle = window.window_handle().unwrap().as_raw();
         let display_handle = window.display_handle().unwrap().as_raw();
+
         let mut extensions = ash_window::enumerate_required_extensions(display_handle)
             .unwrap()
             .to_vec();
         extensions.push(ext::debug_utils::NAME.as_ptr());
+
         let layers = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
 
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
-            .enabled_extension_names(&extensions) // <-- This works fine too!
+            .enabled_extension_names(&extensions)
             .enabled_layer_names(&layers);
 
         let instance = unsafe { entry.create_instance(&create_info, None).unwrap() };
 
-        // Bonus: Enable validation layer
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 3. Enable Debugging via Validation Layers (optional but helpful)
+        // ─────────────────────────────────────────────────────────────
+        // This enables messages from Vulkan that help track incorrect usage.
+        //
         let debug_utils = ext::debug_utils::Instance::new(&entry, &instance);
         let debug_create_info = vk::DebugUtilsMessengerCreateInfoEXT {
             message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
@@ -151,43 +267,71 @@ impl Renderer {
                 .expect("Error creating utils messenger")
         };
 
-        // 2. Create surface
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 4. Create Window Surface
+        // ─────────────────────────────────────────────────────────────
+        // This allows Vulkan to present rendered images to a platform-specific window.
+        //
         let surface = unsafe {
-            ash_window::create_surface(&entry, &instance, display_handle, window_handle, None).unwrap()
+            ash_window::create_surface(&entry, &instance, display_handle, window_handle, None)
+                .unwrap()
         };
         let surface_loader = khr::surface::Instance::new(&entry, &instance);
 
-        // 4. Select physical device
-        let physical_device = unsafe {
-            instance.enumerate_physical_devices().unwrap()
-        }[0];
-        let memory_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 5. Choose a Physical Device (GPU)
+        // ─────────────────────────────────────────────────────────────
+        // Select the first available physical device.
+        // Normally, you'd pick based on features and performance.
+        //
+        let physical_device = unsafe { instance.enumerate_physical_devices().unwrap() }[0];
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
-        // 5. Extracting the surface capabilities
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 6. Query Surface Capabilities
+        // ─────────────────────────────────────────────────────────────
+        // Determine the supported properties of the swapchain images (e.g., count, size).
+        //
         let surface_caps = unsafe {
             surface_loader
                 .get_physical_device_surface_capabilities(physical_device, surface)
                 .unwrap()
         };
+
         let mut image_count = surface_caps.min_image_count + 1;
         if surface_caps.max_image_count > 0 {
             image_count = image_count.min(surface_caps.max_image_count);
         }
 
-        // 6. Find graphics queue family
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 7. Select Queue Family (Graphics & Compute Support)
+        // ─────────────────────────────────────────────────────────────
+        // Vulkan requires you to choose which queue(s) to use for operations.
+        //
         let queue_family_index = unsafe {
             instance
                 .get_physical_device_queue_family_properties(physical_device)
                 .iter()
                 .enumerate()
-                .find(|(_, info)| info.queue_flags.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE))
+                .find(|(_, info)| {
+                    info.queue_flags
+                        .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+                })
                 .map(|(index, _)| index as u32)
                 .unwrap()
         };
 
-        // 7. Create logical device + queue
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 8. Create Logical Device and Retrieve Queue Handle
+        // ─────────────────────────────────────────────────────────────
+        // The logical device provides access to Vulkan functions and queues.
+        //
         let priorities = [1.0];
         let queue_info = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index)
@@ -196,53 +340,60 @@ impl Renderer {
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&device_extensions);
-        let device = unsafe { instance.create_device(physical_device, &device_info, None).unwrap() };
+        let device =
+            unsafe { instance.create_device(physical_device, &device_info, None).unwrap() };
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        // 8. Swapchain loader
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 9. Swapchain & Command Infrastructure
+        // ─────────────────────────────────────────────────────────────
         let swapchain_loader = khr::swapchain::Device::new(&instance, &device);
 
-        // 9. Command pool and command buffers
         let command_pool_info = vk::CommandPoolCreateInfo::default()
             .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-        let command_pool = unsafe {
-            device.create_command_pool(&command_pool_info, None).unwrap()
-        };
+
+        let command_pool =
+            unsafe { device.create_command_pool(&command_pool_info, None).unwrap() };
+
         let buffer_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(image_count);
-        let command_buffers = unsafe {
-            device.allocate_command_buffers(&buffer_info).unwrap()
-        };
-        let command_buffers = command_buffers.to_vec();
 
-        // 10. Sync objects
+        let command_buffers = unsafe { device.allocate_command_buffers(&buffer_info).unwrap() };
+
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 10. Synchronization Primitives
+        // ─────────────────────────────────────────────────────────────
+        // Used for GPU-CPU and inter-GPU coordination.
+        //
         let semaphore_info = vk::SemaphoreCreateInfo::default();
-        let image_available_semaphore = unsafe {
-            device.create_semaphore(&semaphore_info, None).unwrap()
-        };
+        let image_available_semaphore =
+            unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-        let in_flight_fence = unsafe {
-            device.create_fence(&fence_info, None).unwrap()
-        };
+        let in_flight_fence = unsafe { device.create_fence(&fence_info, None).unwrap() };
 
-        // 11. Creating buffers for camera and projection
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 11. Camera Uniform Buffer (CPU-visible)
+        // ─────────────────────────────────────────────────────────────
+        // Uniform buffers are typically updated every frame.
+        //
         let camera_ubo_size = size_of::<CameraUBO>() as vk::DeviceSize;
-        let camera_buffer = unsafe {
+        let camera_buffer = {
             let buffer_info = vk::BufferCreateInfo::default()
                 .size(camera_ubo_size)
                 .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            device.create_buffer(&buffer_info, None)
-                .expect("Failed to create camera buffer")
+            unsafe { device.create_buffer(&buffer_info, None).unwrap() }
         };
-        let camera_buffer_memory = unsafe {
-            let mem_requirements = unsafe {
-                device.get_buffer_memory_requirements(camera_buffer)
-            };
+
+        let camera_buffer_memory = {
+            let mem_requirements = unsafe { device.get_buffer_memory_requirements(camera_buffer) };
             let memory_type_index = memory_properties
                 .memory_types
                 .iter()
@@ -255,29 +406,40 @@ impl Renderer {
                     )
                 })
                 .map(|(i, _)| i as u32)
-                .expect("Failed to find suitable memory type!");
+                .expect("No suitable memory type");
+
             let alloc_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(mem_requirements.size)
                 .memory_type_index(memory_type_index);
-            device.allocate_memory(&alloc_info, None)
-                .expect("Failed to allocate buffer memory")
-        };
-        unsafe {
-            device.bind_buffer_memory(camera_buffer, camera_buffer_memory, 0)
-                .expect("Failed to bind buffer memory");
-        }
-        let camera_mapped_ptr = unsafe {
-            device.map_memory(
-                camera_buffer_memory,
-                0,
-                camera_ubo_size,
-                vk::MemoryMapFlags::empty(),
-            ).expect("Failed to map buffer memory") as *mut CameraUBO
+
+            unsafe { device.allocate_memory(&alloc_info, None).unwrap() }
         };
 
-        // 12. Creating buffers for contree
+        unsafe {
+            device
+                .bind_buffer_memory(camera_buffer, camera_buffer_memory, 0)
+                .unwrap();
+        }
+
+        let camera_mapped_ptr = unsafe {
+            device
+                .map_memory(
+                    camera_buffer_memory,
+                    0,
+                    camera_ubo_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut CameraUBO
+        };
+
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 12. Node Buffer Transfer: Staging to Device Local
+        // ─────────────────────────────────────────────────────────────
+        // GPU-visible (but CPU-inaccessible) memory, using a staging buffer for upload.
+        //
         let buffer_size = (nodes.len() * size_of::<Node>()) as vk::DeviceSize;
-        let (staging_buffer, staging_memory) = Renderer::create_buffer(
+        let (staging_buffer, staging_memory) = create_buffer(
             &device,
             &memory_properties,
             buffer_size,
@@ -285,17 +447,15 @@ impl Renderer {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
 
-        // Copy data to staging buffer
         unsafe {
             let data_ptr = device
                 .map_memory(staging_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
-                .expect("Failed to map staging buffer memory") as *mut Node;
+                .unwrap() as *mut Node;
             data_ptr.copy_from_nonoverlapping(nodes.as_ptr(), nodes.len());
             device.unmap_memory(staging_memory);
         }
 
-        // Create device local buffer
-        let (node_buffer, node_buffer_memory) = Renderer::create_buffer(
+        let (node_buffer, node_buffer_memory) = create_buffer(
             &device,
             &memory_properties,
             buffer_size,
@@ -303,19 +463,32 @@ impl Renderer {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
 
-        // Copy staging data to local buffer
-        Renderer::copy_buffer(&device, command_pool, queue, staging_buffer, node_buffer, buffer_size);
+        copy_buffer(
+            &device,
+            command_pool,
+            queue,
+            staging_buffer,
+            node_buffer,
+            buffer_size,
+        );
+
         unsafe {
             device.destroy_buffer(staging_buffer, None);
             device.free_memory(staging_memory, None);
         }
 
-        // 12. Descriptor set layout
-        let layout_binding = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 13. Descriptor Set Layout
+        // ─────────────────────────────────────────────────────────────
+        // Describes how shaders can access buffers/images.
+        //
+        let layout_binding = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -325,14 +498,20 @@ impl Renderer {
                 .binding(2)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),];
-        let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&layout_binding);
-        let descriptor_set_layout = unsafe {
-            device.create_descriptor_set_layout(&layout_info, None).unwrap()
-        };
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
 
-        // 12. Building shaders
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_binding);
+        let descriptor_set_layout =
+            unsafe { device.create_descriptor_set_layout(&layout_info, None).unwrap() };
+
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 14. Load Shader Modules (Compute, Vertex, Fragment)
+        // ─────────────────────────────────────────────────────────────
+        // Load SPIR-V shader binaries and wrap them in Vulkan shader modules.
+        // These are then plugged into the pipeline stage descriptions.
+        //
         let primary_ray_shader = load_shader_module!(device, "primary_ray.comp");
         let compute_shader_stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
@@ -351,58 +530,98 @@ impl Renderer {
             .module(fullscreen_frag_shader)
             .name(c"main");
 
-        // 13. Creating the compute pipeline
+
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 15. Creating the Compute Pipeline
+        // ─────────────────────────────────────────────────────────────
+        // A compute pipeline consists of a single shader stage and a pipeline layout.
+        // The layout describes the descriptor sets used by the shader (e.g., buffers, images).
+        //
         let descriptor_set_layouts = &[descriptor_set_layout];
+
         let compute_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(descriptor_set_layouts);
+
         let compute_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(&compute_layout_info, None)
                 .unwrap()
         };
+
         let compute_pipeline_info = vk::ComputePipelineCreateInfo::default()
             .stage(compute_shader_stage_info)
             .layout(compute_pipeline_layout);
+
         let compute_pipeline = unsafe {
             device
                 .create_compute_pipelines(vk::PipelineCache::null(), &[compute_pipeline_info], None)
                 .unwrap()[0]
         };
 
-        // 14. Create graphics pipeline
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 16. Creating the Graphics Pipeline
+        // ─────────────────────────────────────────────────────────────
+        // The graphics pipeline uses a vertex and fragment shader, and a lot more state.
+        // It includes viewport/scissor info, rasterization, blending, and a render pass.
+        //
+
         let shader_stages = [vert_shader_stage, frag_shader_stage];
+
+        // We're drawing a fullscreen quad with no vertex input, so we use defaults.
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
+
+        // Use triangle list topology for drawing
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+        // Viewport and scissor will be set dynamically per-frame
         let dynamic_states = vec![
             vk::DynamicState::VIEWPORT,
             vk::DynamicState::SCISSOR,
         ];
+
         let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
             .dynamic_states(&dynamic_states);
+
+        // Basic rasterization setup — fill mode, no culling, clockwise front face
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::CLOCKWISE)
             .line_width(1.0);
+
+        // No multisampling
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        // Enable color output with all color components (RGBA), no blending
         let color_blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(false)
             .color_write_mask(
-                vk::ColorComponentFlags::R | vk::ColorComponentFlags::G |
-                    vk::ColorComponentFlags::B | vk::ColorComponentFlags::A
+                vk::ColorComponentFlags::R |
+                    vk::ColorComponentFlags::G |
+                    vk::ColorComponentFlags::B |
+                    vk::ColorComponentFlags::A
             )];
+
         let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(&color_blend_attachment);
+
+        // Layout used by the graphics pipeline (same descriptor layout as compute)
         let graphics_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(descriptor_set_layouts);
+
         let graphics_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(&graphics_layout_info, None)
                 .unwrap()
         };
+
+        // The render pass describes the framebuffer attachments (color, depth, etc.)
         let surface_format = vk::Format::B8G8R8A8_UNORM;
+
         let render_pass = {
             let color_attachment = [vk::AttachmentDescription::default()
                 .format(surface_format)
@@ -411,25 +630,33 @@ impl Renderer {
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .initial_layout(vk::ImageLayout::UNDEFINED)
                 .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)];
+
             let color_attachment_ref = [vk::AttachmentReference {
                 attachment: 0,
                 layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             }];
+
             let subpass = [vk::SubpassDescription::default()
                 .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
                 .color_attachments(&color_attachment_ref)];
+
             let render_pass_info = vk::RenderPassCreateInfo::default()
                 .attachments(&color_attachment)
                 .subpasses(&subpass);
+
             unsafe {
                 device
                     .create_render_pass(&render_pass_info, None)
                     .unwrap()
             }
         };
+
+        // Tell Vulkan that viewport and scissor will be dynamic
         let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
+
+        // Final graphics pipeline creation
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .viewport_state(&viewport_state_info)
             .stages(&shader_stages)
@@ -442,20 +669,33 @@ impl Renderer {
             .layout(graphics_pipeline_layout)
             .render_pass(render_pass)
             .subpass(0);
+
         let graphics_pipeline = unsafe {
             device
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
                 .unwrap()[0]
         };
 
-        // 15. Destroying the newly created shader module now that the pipeline is built
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 17. Destroy Shader Modules After Pipeline Creation
+        // ─────────────────────────────────────────────────────────────
+        // The compiled SPIR-V shaders are loaded into Vulkan modules, but we don’t
+        // need them anymore after pipeline creation.
+        //
         unsafe {
             device.destroy_shader_module(primary_ray_shader, None);
             device.destroy_shader_module(fullscreen_vert_shader, None);
             device.destroy_shader_module(fullscreen_frag_shader, None);
-        }
+        };
 
-        // 17. Create renderer struct
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 18. Construct Final Renderer Struct
+        // ─────────────────────────────────────────────────────────────
+        // At this point, all Vulkan resources have been created. We now wrap everything
+        // up into the main `Renderer` struct to encapsulate and manage the Vulkan state.
+        //
         let mut renderer = Renderer {
             entry,
             instance,
@@ -492,7 +732,7 @@ impl Renderer {
             graphics_pipeline_layout,
             graphics_pipeline,
             command_pool,
-            command_buffers,
+            command_buffers: command_buffers.to_vec(),
             image_available_semaphore,
             in_flight_fence,
             current_image_index: 0,
@@ -500,8 +740,15 @@ impl Renderer {
             needs_resize: false,
         };
 
-        // 18. Full resize setup (also records command buffers)
+        //
+        // ─────────────────────────────────────────────────────────────
+        // 19. Perform Initial Setup of Swapchain and Framebuffers
+        // ─────────────────────────────────────────────────────────────
+        // This call ensures that the swapchain images, views, and framebuffers
+        // are created based on the current window size.
+        //
         renderer.resize(window);
+
         renderer
     }
 
@@ -608,84 +855,6 @@ impl Renderer {
 }
 
 impl Renderer {
-    fn create_buffer(
-        device: &ash::Device,
-        memory_properties: &vk::PhysicalDeviceMemoryProperties,
-        size: vk::DeviceSize,
-        usage: vk::BufferUsageFlags,
-        properties: vk::MemoryPropertyFlags,
-    ) -> (vk::Buffer, vk::DeviceMemory) {
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let buffer = unsafe { device.create_buffer(&buffer_info, None).unwrap() };
-        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-
-        let memory_type_index = memory_properties.memory_types.iter().enumerate()
-            .find(|(i, mem_type)| {
-                (mem_requirements.memory_type_bits & (1u32 << i)) != 0 &&
-                    mem_type.property_flags.contains(properties)
-            })
-            .map(|(i, _)| i as u32)
-            .expect("Failed to find suitable memory type");
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
-
-        let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None).unwrap() };
-
-        unsafe {
-            device.bind_buffer_memory(buffer, buffer_memory, 0).unwrap();
-        }
-
-        (buffer, buffer_memory)
-    }
-
-    fn copy_buffer(
-        device: &ash::Device,
-        command_pool: vk::CommandPool,
-        graphics_queue: vk::Queue,
-        src: vk::Buffer,
-        dst: vk::Buffer,
-        size: vk::DeviceSize,
-    ) {
-        let command_buffer_alloc_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-
-        let command_buffer = unsafe {
-            device.allocate_command_buffers(&command_buffer_alloc_info)
-                .unwrap()[0]
-        };
-
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        unsafe {
-            device.begin_command_buffer(command_buffer, &begin_info).unwrap();
-            let copy_region = vk::BufferCopy {
-                src_offset: 0,
-                dst_offset: 0,
-                size,
-            };
-            device.cmd_copy_buffer(command_buffer, src, dst, &[copy_region]);
-            device.end_command_buffer(command_buffer).unwrap();
-
-            let binding = [command_buffer];
-            let submit_info = vk::SubmitInfo::default()
-                .command_buffers(&binding);
-
-            device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null()).unwrap();
-            device.queue_wait_idle(graphics_queue).unwrap();
-            device.free_command_buffers(command_pool, &[command_buffer]);
-        }
-    }
-
-
     fn recreate_swapchain(&mut self, window: &Window) {
         let surface_caps = unsafe {
             self.surface_loader
@@ -1098,4 +1267,79 @@ unsafe extern "system" fn vulkan_debug_utils_callback(
         _ => debug!("[Vulkan][unknown] {:?}", message),
     }
     vk::FALSE
+}
+
+fn create_buffer(device: &ash::Device,
+                 memory_properties: &vk::PhysicalDeviceMemoryProperties,
+                 size: vk::DeviceSize,
+                 usage: vk::BufferUsageFlags,
+                 properties: vk::MemoryPropertyFlags,
+) -> (vk::Buffer, vk::DeviceMemory) {
+    let buffer_info = vk::BufferCreateInfo::default()
+        .size(size)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let buffer = unsafe { device.create_buffer(&buffer_info, None).unwrap() };
+    let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+
+    let memory_type_index = memory_properties.memory_types.iter().enumerate()
+        .find(|(i, mem_type)| {
+            (mem_requirements.memory_type_bits & (1u32 << i)) != 0 &&
+                mem_type.property_flags.contains(properties)
+        })
+        .map(|(i, _)| i as u32)
+        .expect("Failed to find suitable memory type");
+
+    let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(mem_requirements.size)
+        .memory_type_index(memory_type_index);
+
+    let buffer_memory = unsafe { device.allocate_memory(&alloc_info, None).unwrap() };
+
+    unsafe {
+        device.bind_buffer_memory(buffer, buffer_memory, 0).unwrap();
+    }
+
+    (buffer, buffer_memory)
+}
+
+fn copy_buffer(device: &ash::Device,
+               command_pool: vk::CommandPool,
+               graphics_queue: vk::Queue,
+               src: vk::Buffer,
+               dst: vk::Buffer,
+               size: vk::DeviceSize,
+) {
+    let command_buffer_alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+
+    let command_buffer = unsafe {
+        device.allocate_command_buffers(&command_buffer_alloc_info)
+            .unwrap()[0]
+    };
+
+    let begin_info = vk::CommandBufferBeginInfo::default()
+        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+    unsafe {
+        device.begin_command_buffer(command_buffer, &begin_info).unwrap();
+        let copy_region = vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: 0,
+            size,
+        };
+        device.cmd_copy_buffer(command_buffer, src, dst, &[copy_region]);
+        device.end_command_buffer(command_buffer).unwrap();
+
+        let binding = [command_buffer];
+        let submit_info = vk::SubmitInfo::default()
+            .command_buffers(&binding);
+
+        device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null()).unwrap();
+        device.queue_wait_idle(graphics_queue).unwrap();
+        device.free_command_buffers(command_pool, &[command_buffer]);
+    }
 }
