@@ -149,10 +149,13 @@ pub struct Renderer {
     // ----------------------------
     // Synchronization Objects
     // ----------------------------
-    /// Semaphore to signal when a swapchain image is ready
+    /// Semaphore signaled when a swapchain image has been acquired and is ready for rendering
     image_available_semaphore: vk::Semaphore,
 
-    /// Fence to signal when rendering is complete
+    /// Semaphore signaled when rendering is complete and the image is ready for presentation
+    render_finished_semaphore: vk::Semaphore,
+
+    /// Fence signaled when all GPU operations for a frame are complete (used for CPU-GPU sync)
     in_flight_fence: vk::Fence,
 
     // ----------------------------
@@ -233,6 +236,7 @@ impl Renderer {
             .unwrap()
             .to_vec();
         extensions.push(ext::debug_utils::NAME.as_ptr());
+        extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr());
 
         let layers = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
 
@@ -372,6 +376,8 @@ impl Renderer {
         //
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let image_available_semaphore =
+            unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
+        let render_finished_semaphore =
             unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
@@ -734,6 +740,7 @@ impl Renderer {
             command_pool,
             command_buffers: command_buffers.to_vec(),
             image_available_semaphore,
+            render_finished_semaphore,
             in_flight_fence,
             current_image_index: 0,
             image_count,
@@ -812,13 +819,14 @@ impl Renderer {
 
         // Submit the commands for both compute and graphics
         let wait_semaphores = [self.image_available_semaphore];
+        let signal_semaphores = [self.render_finished_semaphore];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let cmd_buf = [self.command_buffers[image_index as usize]];
         let submit_info = [vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(&cmd_buf)
-            .signal_semaphores(&[])
+            .signal_semaphores(&signal_semaphores)
         ];
         let result = unsafe {
             self.device
@@ -836,7 +844,9 @@ impl Renderer {
         // Present framebuffer
         let swapchains = &[self.swapchain];
         let image_indices = &[image_index];
+        let wait_semaphores = [self.render_finished_semaphore];
         let present_info = vk::PresentInfoKHR::default()
+            .wait_semaphores(&wait_semaphores)
             .swapchains(swapchains)
             .image_indices(image_indices);
         let result = unsafe {

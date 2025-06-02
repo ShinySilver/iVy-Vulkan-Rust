@@ -56,7 +56,8 @@ impl Camera {
 
         // Mouse lock / unlock
         if input_helper.mouse_pressed(MouseButton::Left) {
-            window.set_cursor_grab(CursorGrabMode::Confined).unwrap();
+            window.set_cursor_grab(CursorGrabMode::Confined)
+                .or_else(|_e| window.set_cursor_grab(CursorGrabMode::Locked)).unwrap();
             window.set_cursor_visible(false);
             self.is_cursor_locked = true;
         }
