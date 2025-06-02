@@ -243,7 +243,8 @@ impl Renderer {
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
             .enabled_extension_names(&extensions)
-            .enabled_layer_names(&layers);
+            .enabled_layer_names(&layers)
+            .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
 
         let instance = unsafe { entry.create_instance(&create_info, None).unwrap() };
 
