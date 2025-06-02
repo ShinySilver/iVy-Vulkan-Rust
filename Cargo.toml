@@ -7,6 +7,9 @@ edition = "2024"
 default = []
 debug-view = [] #["show-image"]
 
+[profile.test]
+opt-level = 0
+
 [profile.dev]
 opt-level = 1
 
@@ -32,7 +35,8 @@ fastnoise2 = "0.3.1"
 kiddo = "5.0.3"                     # KD-Tree used for fast K-nearest, enabling biome lookup
 fast_poisson = "1.0.2"              # Used to place biomes without grid
 image = "0.25.6"                   # Used to create biome images
-opener = "0.7.2"                    # Used to open biome images after their creation
+opener = "0.7.2"
+rand = "0.9.1"                    # Used to open biome images after their creation
 
 [build-dependencies]
 shaderc = "0.8"

@@ -1,6 +1,6 @@
 pub struct MemoryPool<T: Default + Copy> {
     memory: Vec<T>,
-    holes: [Vec<usize>; 64],
+    holes: [Vec<usize>; 63],
 }
 
 impl<T: Default + Copy> MemoryPool<T> {
@@ -9,6 +9,13 @@ impl<T: Default + Copy> MemoryPool<T> {
             memory: Vec::with_capacity(size),
             holes: core::array::from_fn(|_| Vec::new()),
         }
+    }
+
+    pub fn size(&self) -> usize {
+        let freed: usize = self.holes.iter().enumerate()
+            .map(|(i, hole)| hole.len() * (i + 1))
+            .sum();
+        self.memory.len() - freed
     }
 
     pub fn allocate(&mut self) -> (&mut T, usize) {
@@ -27,7 +34,8 @@ impl<T: Default + Copy> MemoryPool<T> {
     }
 
     pub fn allocate_multiple(&mut self, count: usize) -> (&mut [T], usize) {
-        assert!(count > 0 && count <= 64, "N must be between 1 and 64");
+        assert!(count <= 64, "N must be between 0 and 64. N={}", count);
+        if count == 0 { return (&mut [], 0); }
         match self.holes[count - 1].pop() {
             Some(index) => (&mut self.memory[index..index + count], index),
             None => {
@@ -168,7 +176,7 @@ mod tests {
 
     // Test invalid allocate_multiple with i32 type
     #[test]
-    #[should_panic(expected = "N must be between 1 and 64")]
+    #[should_panic(expected = "N must be between 0 and 64. N=65")]
     fn test_invalid_allocate_multiple_i32() {
         let mut pool = MemoryPool::<i32>::new(10);
         pool.allocate_multiple(65); // Should panic

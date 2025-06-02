@@ -20,7 +20,7 @@ enum Voxel {
 
 pub struct World {
     /* Voxel data. The only data structure that is sent to the GPU. */
-    pub data: SparseTree<u8>,
+    pub data: SparseTree<u16>,
 
     /* Per-voxel metadata. Not sent to the GPU */
     is_generated: SparseBitmask, // Used to differentiate "air" voxels from "not generated" voxels
@@ -109,14 +109,14 @@ impl World {
                 let top_end = center_z + height;
 
                 for z in top_start..=top_end {
-                    self.data.set(uvec3(x, y, z), Voxel::Grass as u8);
+                    self.data.set(uvec3(x, y, z), Voxel::Grass as u16);
                 }
 
                 let bottom_start = center_z - depth;
                 let bottom_end = center_z - min_neighbour_depth;
 
                 for z in bottom_start..=bottom_end {
-                    self.data.set(uvec3(x, y, z), Voxel::Stone as u8);
+                    self.data.set(uvec3(x, y, z), Voxel::Stone as u16);
                 }
             }
         }
