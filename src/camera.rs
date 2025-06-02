@@ -1,4 +1,5 @@
 use glam;
+use glam::vec2;
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 use winit::window::{CursorGrabMode, Window};
@@ -9,6 +10,7 @@ pub struct Camera {
     pub forward: glam::Vec3,
     pub up: glam::Vec3,
     matrix: glam::Mat4,
+    mouse_delta_smoothed: glam::Vec2,
     is_cursor_locked: bool,
 }
 
@@ -19,6 +21,7 @@ impl Camera {
             forward,
             up,
             matrix: glam::Mat4::IDENTITY,
+            mouse_delta_smoothed: Default::default(),
             is_cursor_locked: false,
         }
     }
@@ -65,7 +68,13 @@ impl Camera {
 
         // Mouse movement
         if self.is_cursor_locked {
-            let (delta_x, delta_y) = input_helper.mouse_diff();
+            let (raw_dx, raw_dy) = input_helper.mouse_diff();
+            let smoothing = 0.5;
+            self.mouse_delta_smoothed = self.mouse_delta_smoothed.lerp(vec2(raw_dx, raw_dy), smoothing);
+
+            let delta_x = self.mouse_delta_smoothed.x;
+            let delta_y = self.mouse_delta_smoothed.y;
+
             if delta_x != 0f32 || delta_y != 0f32 {
                 let sensitivity = 0.002;
 
