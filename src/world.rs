@@ -27,7 +27,7 @@ pub struct World {
     // TODO: voxel entities, structures?
 
     /* World metadata */
-    seed: u64,
+    seed: i32,
     width: u32,
     depth: u32,
 
@@ -37,7 +37,7 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(depth: u32, seed: u64) -> Self {
+    pub fn new(depth: u32, seed: i32) -> Self {
         let mut world = World {
             data: SparseTree::new(depth as usize),
             is_generated: Default::default(),
@@ -59,7 +59,7 @@ impl World {
         /* Generating a base heightmap */
         let tree_code = "IgAAAABAAACAPxoAARsAGwAZABkAEwDNzEw+DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwAAAAAAAAAAgD8BHQAaAAAAAIA/ARwAAQUAAQAAAAAAAAAAAAAAAAAAAAAAAAAAMzPrQQAAAIA/AOxRGEAAMzMzQA==";
         let node = SafeNode::from_encoded_node_tree(tree_code).unwrap();
-        let heightmap = Img::from_node(&node, self.width, 145902);
+        let heightmap = Img::from_node(&node, self.width, self.seed);
 
         /* Using it to build a hard continent shape */
         let continent_shape = heightmap.map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } });

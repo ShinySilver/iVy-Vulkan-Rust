@@ -38,7 +38,7 @@ fn main() {
     let mut input_helper = WinitInputHelper::new();
 
     // Generating world
-    let world = World::new(5, 158963258);
+    let world = World::new(5, 145902);
 
     // Creating renderer & camera
     let mut renderer = renderer::Renderer::new(&window, world.raw_voxel_data());
