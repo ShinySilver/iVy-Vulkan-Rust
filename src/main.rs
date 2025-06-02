@@ -10,7 +10,7 @@ use winit_input_helper::WinitInputHelper;
 
 use std::ops::{Add, Mul};
 use std::time::{Duration, Instant};
-use glam::{uvec3, UVec3};
+use glam::{uvec3, vec3, UVec3};
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -43,8 +43,8 @@ fn main() {
     // Creating renderer & camera
     let mut renderer = renderer::Renderer::new(&window, world.raw_voxel_data());
     let mut camera = camera::Camera::new(
-        glam::Vec3::new(0.0, 1.0, 5.0),
-        glam::Vec3::X,
+        vec3(0.0, 800.0, 1024.0),
+        vec3(1.0, -0.45, -0.8),
         glam::Vec3::Y,
     );
     let mut projection = camera::Projection::new(45.0_f32.to_radians(), 0.1, 100.0);
