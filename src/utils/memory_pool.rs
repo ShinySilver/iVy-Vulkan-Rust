@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct MemoryPool<T: Default + Copy> {
     memory: Vec<T>,
     holes: [Vec<usize>; 63],

@@ -1,3 +1,4 @@
+use std::time::Instant;
 use glam;
 use glam::vec2;
 use winit::event::MouseButton;
@@ -9,9 +10,11 @@ pub struct Camera {
     pub position: glam::Vec3,
     pub forward: glam::Vec3,
     pub up: glam::Vec3,
+    pub time: f32,
     matrix: glam::Mat4,
     mouse_delta_smoothed: glam::Vec2,
     is_cursor_locked: bool,
+    start_time: Instant,
 }
 
 impl Camera {
@@ -20,15 +23,18 @@ impl Camera {
             position,
             forward,
             up,
+            time: 0.0,
             matrix: glam::Mat4::IDENTITY,
             mouse_delta_smoothed: Default::default(),
             is_cursor_locked: false,
+            start_time: Instant::now(),
         }
     }
     pub fn view_matrix(&self) -> glam::Mat4 {
         self.matrix
     }
     pub fn update(&mut self, window: &Window, input_helper: &WinitInputHelper) {
+        self.time = self.start_time.elapsed().as_secs_f32();
         let right = self.forward.cross(self.up).normalize();
         let speed = if input_helper.held_shift() { 10.0 } else { 1.0 };
 

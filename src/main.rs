@@ -38,10 +38,10 @@ fn main() {
     let mut input_helper = WinitInputHelper::new();
 
     // Generating world
-    let world = World::new(5, 145902);
+    let world = World::new(5, 145904);
 
     // Creating renderer & camera
-    let mut renderer = renderer::Renderer::new(&window, world.raw_voxel_data());
+    let mut renderer = renderer::Renderer::new(&window, world.raw_node_data(), world.raw_voxel_data());
     let mut camera = camera::Camera::new(
         vec3(0.0, 800.0, 1024.0),
         vec3(1.0, -0.45, -0.8),
@@ -77,7 +77,7 @@ fn main() {
                 frame_count += 1;
                 if frame_count % 1000 == 0 {
                     let duration = start.elapsed();
-                    info!("Average frame time: {}ms ({} FPS)", duration.as_millis(), frame_count as f32 / duration.as_secs_f32());
+                    info!("Average frame time: {:.2}ms ({:.2} FPS)", duration.as_millis() as f32 / 1000., frame_count as f32 / duration.as_secs_f32());
                     start = Instant::now();
                     frame_count = 0;
                 }

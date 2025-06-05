@@ -9,6 +9,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::{Camera, Projection};
 use crate::utils::sparse_tree::Node;
+use crate::world::Voxel;
 
 pub struct Renderer {
     // ----------------------------
@@ -107,6 +108,15 @@ pub struct Renderer {
     /// Number of nodes in the tree
     node_count: usize,
 
+    /// GPU buffer for voxel data
+    voxel_buffer: vk::Buffer,
+
+    /// Memory for the voxel buffer
+    voxel_buffer_memory: vk::DeviceMemory,
+
+    /// Number of voxels in the tree
+    voxel_count: usize,
+
     // ----------------------------
     // Descriptor Sets & Layouts
     // ----------------------------
@@ -199,13 +209,14 @@ macro_rules! load_shader_module {
 
 #[repr(C)]
 pub struct CameraUBO {
-    pub position: glam::Vec4,
+    pub camera_position: glam::Vec3,
+    pub camera_time: f32,
     pub inv_view: glam::Mat4,
     pub inv_proj: glam::Mat4,
 }
 
 impl Renderer {
-    pub fn new(window: &Window, nodes: &Vec<Node>) -> Self {
+    pub fn new(window: &Window, nodes: &Vec<Node>, voxels: &Vec<Voxel>) -> Self {
         //
         // ─────────────────────────────────────────────────────────────
         // 1. Load Vulkan Entry Point
@@ -445,6 +456,9 @@ impl Renderer {
         // ─────────────────────────────────────────────────────────────
         // GPU-visible (but CPU-inaccessible) memory, using a staging buffer for upload.
         //
+
+        // Starting with tree nodes...
+
         let buffer_size = (nodes.len() * size_of::<Node>()) as vk::DeviceSize;
         let (staging_buffer, staging_memory) = create_buffer(
             &device,
@@ -484,6 +498,47 @@ impl Renderer {
             device.free_memory(staging_memory, None);
         }
 
+        // And followed with tree leaves
+
+        let buffer_size = (voxels.len() * size_of::<Voxel>()) as vk::DeviceSize;
+        let (staging_buffer, staging_memory) = create_buffer(
+            &device,
+            &memory_properties,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(staging_memory, 0, buffer_size, vk::MemoryMapFlags::empty())
+                .unwrap() as *mut Voxel;
+            data_ptr.copy_from_nonoverlapping(voxels.as_ptr(), voxels.len());
+            device.unmap_memory(staging_memory);
+        }
+
+        let (voxel_buffer, voxel_buffer_memory) = create_buffer(
+            &device,
+            &memory_properties,
+            buffer_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        copy_buffer(
+            &device,
+            command_pool,
+            queue,
+            staging_buffer,
+            voxel_buffer,
+            buffer_size,
+        );
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_memory, None);
+        }
+
         //
         // ─────────────────────────────────────────────────────────────
         // 13. Descriptor Set Layout
@@ -503,6 +558,11 @@ impl Renderer {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
@@ -730,6 +790,9 @@ impl Renderer {
             node_buffer,
             node_buffer_memory,
             node_count: nodes.len(),
+            voxel_buffer,
+            voxel_buffer_memory,
+            voxel_count: voxels.len(),
             descriptor_pool: vk::DescriptorPool::null(),
             descriptor_set_layout,
             compute_descriptor_set: vk::DescriptorSet::null(),
@@ -812,7 +875,8 @@ impl Renderer {
         let inv_view = camera.view_matrix().inverse();
         let inv_proj = projection.projection_matrix().inverse();
         let ubo_data = CameraUBO {
-            position: camera.position.extend(1.0),
+            camera_position: camera.position,
+            camera_time: camera.time,
             inv_view,
             inv_proj,
         };
@@ -882,7 +946,7 @@ impl Renderer {
             }
             _ => surface_caps.current_extent,
         };
-        let present_mode = vk::PresentModeKHR::FIFO;
+        let present_mode = vk::PresentModeKHR::IMMEDIATE;
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
             .min_image_count(self.image_count)
@@ -1078,10 +1142,14 @@ impl Renderer {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
                 descriptor_count: 2,
             },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 2,
+            },
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(3);
+            .max_sets(4);
         let descriptor_pool =
             unsafe { self.device.create_descriptor_pool(&pool_info, None).unwrap() };
 
@@ -1107,6 +1175,11 @@ impl Renderer {
             offset: 0,
             range: (self.node_count * size_of::<Node>()) as vk::DeviceSize,
         };
+        let voxel_buffer_info = vk::DescriptorBufferInfo {
+            buffer: self.voxel_buffer,
+            offset: 0,
+            range: (self.voxel_count * size_of::<Voxel>()) as vk::DeviceSize,
+        };
         for &set in &descriptor_sets {
             let write = [
                 vk::WriteDescriptorSet::default()
@@ -1124,6 +1197,11 @@ impl Renderer {
                     .dst_binding(2)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&node_buffer_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(3)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&voxel_buffer_info)),
             ];
             unsafe { self.device.update_descriptor_sets(&write, &[]) };
         }

@@ -5,15 +5,20 @@ layout (local_size_x = 16, local_size_y = 16) in;
 #define NODE_WIDTH 4
 #define NODE_WIDTH_SQRT 2
 #define WORLD_WIDTH 1024
+#define MAX_DEPTH 6
 
 #define EPSILON 1e-6f
-#define MINI_STEP_SIZE 1e-2f
-#define MICRO_STEP_SIZE 1e-3f
+#define MINI_STEP_SIZE 5e-2f
+#define MICRO_STEP_SIZE 2e-3f
 
 struct Node {
     uint bitmask_low;
     uint bitmask_high;
     uint header;
+};
+
+struct VoxelPair {
+    uint voxel_pair;
 };
 
 layout (rgba8, set = 0, binding = 0) uniform image2D img;
@@ -22,8 +27,13 @@ layout (set = 0, binding = 1) uniform CameraData {
     mat4 invView;
     mat4 invProj;
 } camera;
+
 layout (std430, set = 0, binding = 2) buffer Nodes {
     Node node_pool[];
+};
+
+layout (std430, set = 0, binding = 3) buffer Voxels {
+    VoxelPair voxel_pool[];
 };
 
 /**
@@ -39,8 +49,6 @@ float AABBIntersect(vec3 bmin, vec3 bmax, vec3 orig, vec3 invdir, out vec3 aabb_
     aabb_mask = step(vmin, vec3(tmin));
     return max(0.0, tmin);
 }
-
-
 /**
  * Our raytracing function
  */
@@ -57,7 +65,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
     const vec3 bmin = vec3(MINI_STEP_SIZE), bmax = vec3(WORLD_WIDTH - MINI_STEP_SIZE);
     if (any(greaterThanEqual(ray_pos, bmax)) || any(lessThan(ray_pos, bmin))) {
         const float intersect = AABBIntersect(bmin, bmax, camera.position.xyz, inverted_ray_dir, step_mask);
-        if (intersect < 0) return 0; // not bothering with rays that will not hit the bbox
+        if (intersect < 0) return 0xffffffffu; // not bothering with rays that will not hit the bbox
         if (intersect > 0) ray_pos += ray_dir * intersect + step_mask * ray_sign_11 * MINI_STEP_SIZE;
     }
 
@@ -67,7 +75,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
     bool has_collided, exited_local = false, exited_global = false;
 
     // setting up the stack & recurrent variables that will be used to traverse the 64-tree
-    uint stack[7];
+    uint stack[MAX_DEPTH];
     uint depth = 0;
     uint current_node_index = 0;
     uint bitmask_index;
@@ -80,10 +88,14 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
 
     // Doing the actual traversal!
     do {
-        /**
+    /**
          * For the most part, we are doing the classical DDA algorithm in this do-while loop
          */
         do {
+            // increment step count
+            step_count += 1;
+            if (step_count > max_step_count) return 0xffffffffu;
+
             // check hit
             uvec3 v = (uvec3(ray_pos) & (node_width * NODE_WIDTH - 1u)) >> findMSB(node_width);
             bitmask_index = v.x + (v.z << NODE_WIDTH_SQRT) + (v.y << NODE_WIDTH);
@@ -99,31 +111,23 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
             // check bbox
             exited_local = any(greaterThanEqual(ray_pos, lbmax)) || any(lessThan(ray_pos, lbmin));
             exited_global = any(greaterThanEqual(ray_pos, bmax)) || any(lessThan(ray_pos, bmin));
-
-            // increment step count
-            step_count += 1;
-            if(step_count > max_step_count) return 1;
         } while (!has_collided && !exited_local && !exited_global);
-        /**
+    /**
          * First possible reason for exiting the DDA main loop: we hit something, so we need to either go down or return a color
          */
         if (has_collided) {
             do {
-                // if there is a hit on a voxel in a terminal node: return hit color
-                if ((current_node.header & (0x1u << 31)) != 0) {
-                    ray_pos -= vec3(MINI_STEP_SIZE) * ray_sign_11;
-                    return 4;
-                    //bool is_lod = bool((current_node.header & (0x1u << 31)) != 0u);
-                    //uint color_index = is_lod ? (current_node.header & ~(0x3u << 30)) : 1;
-                    //
-                    //return color_index;
-                }
-
-                // if we get a hit on a non-empty node, we lookup its node index to know where to descend to
+                // we lookup the node index of the hit to know where to descend to
                 uint filtered_low, filtered_high;
                 if (bitmask_index < 32) { filtered_low = current_node.bitmask_low & ((1u << bitmask_index) - 1u); filtered_high = 0u; }
                 else { filtered_low = current_node.bitmask_low; filtered_high = current_node.bitmask_high & ((1u << (bitmask_index - 32)) - 1u); }
                 uint hit_index = uint(bitCount(filtered_low) + bitCount(filtered_high)) + uint((current_node.header & ~(0x1u << 31)));
+
+                // if there is a hit on a voxel in a terminal node: return hit color
+                if ((current_node.header & (0x1u << 31)) != 0) {
+                    ray_pos -= vec3(MINI_STEP_SIZE) * ray_sign_11;
+                    return hit_index;
+                }
 
                 // going down
                 depth += 1;
@@ -137,6 +141,9 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
                 bitmask_index = v.x + (v.z << NODE_WIDTH_SQRT) + (v.y << NODE_WIDTH);
                 uint mask = 1u << (bitmask_index & 31);
                 has_collided = ((bitmask_index < 32) ? (current_node.bitmask_low & mask) : (current_node.bitmask_high & mask)) != 0;
+
+                // quick check to prevent accidents
+                if (depth > MAX_DEPTH)  return 0xffffffffu;
             } while (has_collided);
 
             // update lbb
@@ -150,7 +157,7 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
         else if (exited_local && !exited_global) {
             do {
                 // quick check to prevent accidents
-                if(depth==0) return 1;
+                if (depth == 0) return 0xffffffffu;
 
                 // go up
                 current_node_index = stack[depth];
@@ -169,8 +176,8 @@ uint raytrace(inout vec3 ray_pos, vec3 ray_dir) {
             } while (exited_local);
         }
     } while (!exited_global);
-    return 0;
-}
+    return 0xffffffffu;
+} // fix micro-step out of bound
 
 /**
  * Doing some maths to get the ray dir given the camera position, direction, and the target pixel on-screen coordinates
@@ -191,13 +198,13 @@ vec3 get_ray_dir(ivec2 screen_position) {
  * Our voxel color table
  */
 const vec3 colors[] = {
-    vec3(0.69, 0.88, 0.90), // SKY_BLUE
-    vec3(1.00, 0.40, 0.40), // DEBUG_RED
-    vec3(0.40, 1.00, 0.40), // DEBUG_GREEN
-    vec3(0.40, 0.40, 1.00), // DEBUG_BLUE
-    vec3(0.55, 0.55, 0.55), // STONE
-    vec3(0.42, 0.32, 0.25), // DIRT
-    vec3(0.30, 0.59, 0.31)  // GRASS
+vec3(0.69, 0.88, 0.90), // SKY_BLUE
+vec3(1.00, 0.40, 0.40), // DEBUG_RED
+vec3(0.40, 1.00, 0.40), // DEBUG_GREEN
+vec3(0.40, 0.40, 1.00), // DEBUG_BLUE
+vec3(0.55, 0.55, 0.55), // STONE
+vec3(0.42, 0.32, 0.25), // DIRT
+vec3(0.30, 0.59, 0.31)  // GRASS
 };
 
 /**
@@ -214,15 +221,40 @@ void main() {
     // primary ray
     vec3 ray_pos = camera.position.xyz;
     uint voxel_index = raytrace(ray_pos, ray_dir);
-    vec3 voxel_color = colors[voxel_index].xyz;
+    if (voxel_index == 0xffffffffu) {imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(colors[0], 0)); return;}
+    uint pair_index = voxel_index >> 1;
+    uint voxel_pair = voxel_pool[pair_index].voxel_pair;
+    uint voxel = (voxel_index & 0x1u) != 0 ? (voxel_pair >> 16) & 0xFFFFu : (voxel_pair & 0xFFFFu);
+    uint material = voxel & 0x7fu;
+    uint encoded_normal = (voxel >> 7);
+    vec3 normal = normalize(vec3(float((encoded_normal >> 6) & 0x7u), float((encoded_normal >> 3) & 0x7u), float(encoded_normal & 0x7u)) / 3.5 - 1.0);
+    vec3 voxel_color = colors[material < 7 ? material : 1].xyz;
 
-    // secondary ray with fixed sun direction
-    const vec3 sun_direction = normalize(vec3(0.4, 0.4, 1.0));
-    if (voxel_index != 0) {
-        uint sun_voxel_index = raytrace(ray_pos, sun_direction);
-        if (sun_voxel_index != 0) voxel_color *= 0.5; // Reduced brightness for shadows
-    }
+    // sun direction
+    float angle = camera.position.w * 1.0;
+    float c = cos(angle);
+    float s = sin(angle);
+    const vec3 base_sun_direction = normalize(vec3(0.4, 0.4, 1.0));
+    vec3 sun_direction = normalize(vec3(
+                                   c * base_sun_direction.x - s * base_sun_direction.y,
+                                   s * base_sun_direction.x + c * base_sun_direction.y,
+                                   base_sun_direction.z
+                                   ));
+
+    // diffuse shading
+    float diffuse = 0.5 + dot(normalize(normal), normalize(sun_direction.xyz)) / 2;
+    if (diffuse < 0.5) { diffuse = diffuse / 3 + 0.3333;};
+
+    // secondary ray
+    float shadow = 1.0;
+    ray_pos = ray_pos + normal.xzy * 0.5;
+    uint sun_voxel_index = raytrace(ray_pos, sun_direction.xzy);
+    if (sun_voxel_index != 0xffffffffu) shadow = 0.5; // Reduced brightness for shadows
+
+    // V1: I want
+    // I want 0.5 in shadows
+    // I want 1.0 when colinear, and 0.5 when not not colinear
 
     // writing to the framebuffer
-    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(voxel_color, 0));
+    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(voxel_color * min(diffuse, shadow), 0));
 }

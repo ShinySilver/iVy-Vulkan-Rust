@@ -1,14 +1,16 @@
 use fastnoise2::generator::*;
 use fastnoise2::SafeNode;
-use glam::{uvec2, uvec3, vec2, UVec2, UVec3};
+use glam::{ivec3, uvec2, uvec3, vec2, vec3, UVec2, UVec3, Vec3, Vec3Swizzles};
 use log::{info, warn};
 use crate::utils::image::Img;
 use crate::utils::image_transforms;
 use crate::utils::sparse_bitmask::SparseBitmask;
 use crate::utils::sparse_tree::{Node, SparseTree};
 
+pub type Voxel = u16;
+
 #[repr(u8)]
-enum Voxel {
+enum Material {
     Air,
     DebugRed,
     DebugGreen,
@@ -25,6 +27,7 @@ pub struct World {
     /* Per-voxel metadata. Not sent to the GPU */
     is_generated: SparseBitmask, // Used to differentiate "air" voxels from "not generated" voxels
     // TODO: voxel entities, structures?
+    // TODO: inverted bitmask for voxel out of the envelope
 
     /* World metadata */
     seed: i32,
@@ -40,21 +43,38 @@ impl World {
     pub fn new(depth: u32, seed: i32) -> Self {
         let mut world = World {
             data: SparseTree::new(depth as usize),
-            is_generated: Default::default(),
+            is_generated: SparseBitmask::new(2 * depth as usize),
             seed,
             width: 4u32.pow(depth),
             depth,
             bottom_heightmap: Default::default(),
             top_heightmap: Default::default(),
         };
-        world.plan();
-        world.pre_generate();
+        world.pre_generate_heightmaps();
+        world.pre_generate_voxels();
+        world.pre_generate_normals();
         world
     }
 
-    pub(crate) fn raw_voxel_data(&self) -> &Vec<Node> { self.data.nodes.raw() }
+    pub(crate) fn raw_node_data(&self) -> &Vec<Node> { self.data.nodes.raw() }
 
-    fn plan(&mut self) {
+    pub(crate) fn raw_voxel_data(&self) -> &Vec<Voxel> { self.data.voxels.raw() }
+
+    pub fn peek(&self, coord: UVec3) -> u8 { todo!() }
+
+    pub fn generate(&mut self, coord: UVec3) -> bool { todo!() }
+
+    pub fn is_generated(&self, pos: UVec3) -> bool { self.is_generated.get(pos) }
+
+    pub fn is_solid(&self, pos: UVec3) -> bool {
+        if self.is_generated(pos) { self.data.get(pos) & 0x7fu16 != Material::Air as u16 } else {
+            pos.z <= *self.top_heightmap.get(pos.xy()) as u32 && pos.z >= *self.bottom_heightmap.get(pos.xy()) as u32
+        }
+    }
+}
+
+impl World {
+    fn pre_generate_heightmaps(&mut self) {
         info!("width: {}", self.width);
         /* Generating a base heightmap */
         let tree_code = "IgAAAABAAACAPxoAARsAGwAZABkAEwDNzEw+DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwAAAAAAAAAAgD8BHQAaAAAAAIA/ARwAAQUAAQAAAAAAAAAAAAAAAAAAAAAAAAAAMzPrQQAAAIA/AOxRGEAAMzMzQA==";
@@ -76,7 +96,7 @@ impl World {
         self.top_heightmap = top_envelope;
     }
 
-    fn pre_generate(&mut self) {
+    fn pre_generate_voxels(&mut self) {
         let center_z = self.width / 2;
 
         for x in 0..self.width {
@@ -109,20 +129,56 @@ impl World {
                 let top_end = center_z + height;
 
                 for z in top_start..=top_end {
-                    self.data.set(uvec3(x, y, z), Voxel::Grass as u16);
+                    self.data.set(uvec3(x, y, z), if top_end - top_start > 1 { Material::Stone } else { Material::Grass } as u16);
+                    self.is_generated.set(uvec3(x, y, z), true);
                 }
 
                 let bottom_start = center_z - depth;
                 let bottom_end = center_z - min_neighbour_depth;
 
                 for z in bottom_start..=bottom_end {
-                    self.data.set(uvec3(x, y, z), Voxel::Stone as u16);
+                    self.data.set(uvec3(x, y, z), Material::Stone as u16);
+                    self.is_generated.set(uvec3(x, y, z), true);
                 }
             }
         }
     }
 
-    pub fn peek(&self, coord: UVec3) -> u8 { todo!() }
+    fn pre_generate_normals(&mut self) {
+        let mut copy = self.data.clone();
+        let mut count = 0u32;
+        self.data.for_each(|pos, voxel| {
+            let radius = 2;
+            let mut normal = Vec3::default();
+            for dx in -radius..=radius {
+                for dy in -radius..=radius {
+                    for dz in -radius..=radius {
+                        if dx == 0 && dy == 0 && dz == 0 { continue; }
+                        let offset = ivec3(dx, dy, dz);
+                        let local_pos = (pos.as_ivec3() + offset).as_uvec3();
+                        let local_height = *self.top_heightmap.get(local_pos.xy()) as u32;
+                        let local_depth = *self.bottom_heightmap.get(local_pos.xy()) as u32;
+                        let is_solid = if self.is_generated(local_pos) { self.data.get(local_pos) & 0x7fu16 != (Material::Air as u16) } else {
+                            (local_pos.z <= self.width / 2 + local_height)
+                                && (local_pos.z >= self.width / 2 - local_depth) && local_height !=0 && local_depth != 0
+                        };
+                        let distance = offset.as_vec3().length();
+                        if !is_solid && distance > 0.0 {
+                            let weight = 1.0 / (distance);
+                            normal += offset.as_vec3().normalize() * weight;
+                        }
+                    }
+                }
+            }
+            copy.set(pos, voxel | (Self::encode_normal(normal.normalize()) << 7));
+            count += 1;
+        });
+        info!("Generated {} voxels !", count);
+        self.data = copy;
+    }
 
-    pub fn generate(&mut self, coord: UVec3) -> bool { todo!() }
+    fn encode_normal(normal: Vec3) -> u16 {
+        let map = |v: f32| (((v + 1.0) * 3.5).round() as u16).min(0b111u16);
+        (map(normal.x) << 6) | (map(normal.y) << 3) | map(normal.z)
+    }
 }

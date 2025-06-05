@@ -17,9 +17,10 @@ impl Node {
     }
 }
 
+#[derive(Clone)]
 pub struct SparseTree<T: Default + Copy + PartialEq> {
     pub(crate) nodes: MemoryPool<Node>,
-    voxels: MemoryPool<T>,
+    pub(crate) voxels: MemoryPool<T>,
     root_index: usize,
     tree_depth: usize,
 }
@@ -98,6 +99,43 @@ impl<T: Default + Copy + PartialEq> SparseTree<T> {
     pub fn remove(&mut self, _pos: UVec3) {
         unimplemented!()
     }
+
+    pub fn for_each<F: FnMut(UVec3, &T)>(&self, mut f: F) {
+        let mut stack = vec![(self.root_index, UVec3::ZERO, 0)];
+        while let Some((node_index, base_pos, depth)) = stack.pop() {
+            let node = self.nodes.acquire(node_index);
+            let is_leaf_level = depth + 1 == self.tree_depth;
+
+            let mut bit = node.bitmask;
+            let mut i = 0;
+            while bit != 0 {
+                if bit & 1 != 0 {
+                    let child_xyz = i as u32;
+
+                    // Decode position
+                    let dx = child_xyz % 4;
+                    let dy = (child_xyz / 4) % 4;
+                    let dz = (child_xyz / 16) % 4;
+                    let child_offset = UVec3::new(dx, dy, dz);
+
+                    let child_width = 1 << ((self.tree_depth - depth - 1) * 2);
+                    let child_pos = base_pos + child_offset * child_width;
+
+                    let local_index = (node.bitmask & !(u64::MAX << i)).count_ones() as usize;
+                    if is_leaf_level {
+                        let voxel_index = node.children_index() + local_index;
+                        f(child_pos, self.voxels.acquire(voxel_index));
+                    } else {
+                        let child_node_index = node.children_index() + local_index;
+                        stack.push((child_node_index, child_pos, depth + 1));
+                    }
+                }
+                bit >>= 1;
+                i += 1;
+            }
+        }
+    }
+
 
     fn create_node_child(&mut self, parent_index: usize, child_xyz: u32, stack_depth: usize) -> (&mut Node, usize) {
         let parent = *self.nodes.acquire(parent_index);
@@ -200,7 +238,7 @@ impl<T: Default + Copy + PartialEq> Default for SparseTree<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::UVec3;
+    use glam::{uvec3, UVec3};
 
     #[test]
     fn test_default_voxel_value() {
@@ -269,5 +307,35 @@ mod tests {
         // Ensure both values are correct and independent
         assert_eq!(tree.get(UVec3::new(0, 0, 0)), 100);
         assert_eq!(tree.get(UVec3::new(4, 4, 4)), 200);
+    }
+
+    #[test]
+    fn test_sparse_tree_for_each() {
+        let mut tree = SparseTree::<u32>::new(3);
+
+        // Insert a few voxels
+        let values = vec![
+            (uvec3(1, 2, 3), 42),
+            (uvec3(4, 4, 4), 99),
+            (uvec3(15, 0, 0), 7),
+        ];
+
+        for (pos, val) in &values {
+            tree.set(*pos, *val);
+        }
+
+        // Collect entries using for_each
+        let mut collected = std::collections::HashMap::new();
+        tree.for_each(|pos, voxel| {
+            collected.insert(pos, *voxel);
+        });
+
+        // Verify that all expected values are present
+        for (pos, val) in values {
+            assert_eq!(collected.get(&pos), Some(&val));
+        }
+
+        // Make sure no unexpected entries are present
+        assert_eq!(collected.len(), 3);
     }
 }

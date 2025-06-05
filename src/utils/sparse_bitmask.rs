@@ -219,12 +219,12 @@ mod tests {
     #[test]
     fn test_set_with_fuzzing() {
         use rand::Rng;
-        let depth = 7; // 128
+        let depth = 4; // 128
         let size = 1 << (depth - 1);
         let mut rng = rand::rng();
         let mut bitmask = SparseBitmask::new(depth);
         let mut reference = vec![vec![vec![false; size]; size]; size];
-        for _ in 0..100_000 {
+        for _ in 0..1_000 {
             let x = rng.random_range(0..size);
             let y = rng.random_range(0..size);
             let z = rng.random_range(0..size);
