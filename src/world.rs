@@ -1,3 +1,4 @@
+use std::time::Instant;
 use fastnoise2::generator::*;
 use fastnoise2::SafeNode;
 use glam::{ivec3, uvec2, uvec3, vec2, vec3, UVec2, UVec3, Vec3, Vec3Swizzles};
@@ -50,9 +51,15 @@ impl World {
             bottom_heightmap: Default::default(),
             top_heightmap: Default::default(),
         };
+        let t = Instant::now();
         world.pre_generate_heightmaps();
+        info!("Pre-generating heightmaps took {:?}", t.elapsed());
+        let t = Instant::now();
         world.pre_generate_voxels();
+        info!("Pre-generating voxels took {:?}", t.elapsed());
+        let t = Instant::now();
         world.pre_generate_normals();
+        info!("Pre-generating normals took {:?}", t.elapsed());
         world
     }
 

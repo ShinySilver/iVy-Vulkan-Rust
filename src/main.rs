@@ -39,6 +39,9 @@ fn main() {
 
     // Generating world
     let world = World::new(5, 145904);
+    info!("World has a memory footprint of {} MB ({} MB for nodes, {} MB for leaves)",
+        (world.data.nodes.size()*96 + world.data.voxels .size()*16) as f64 / 8. / 1e6,
+        (world.data.nodes.size()*96) as f64 / 8. / 1e6, (world.data.voxels.size()*16) as f64 / 8. / 1e6);
 
     // Creating renderer & camera
     let mut renderer = renderer::Renderer::new(&window, world.raw_node_data(), world.raw_voxel_data());

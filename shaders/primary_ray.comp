@@ -247,7 +247,7 @@ void main() {
 
     // secondary ray
     float shadow = 1.0;
-    ray_pos = ray_pos + normal.xzy * 0.5;
+    ray_pos = ray_pos + normal.xzy * 1.0;
     uint sun_voxel_index = raytrace(ray_pos, sun_direction.xzy);
     if (sun_voxel_index != 0xffffffffu) shadow = 0.5; // Reduced brightness for shadows
 
