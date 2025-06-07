@@ -3,6 +3,7 @@ use ash::khr;
 use ash::vk;
 
 use std::ffi::CStr;
+use ash::prelude::VkResult;
 use log::{debug, info, warn, error};
 use winit::window::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -160,13 +161,16 @@ pub struct Renderer {
     // Synchronization Objects
     // ----------------------------
     /// Semaphore signaled when a swapchain image has been acquired and is ready for rendering
-    image_available_semaphore: vk::Semaphore,
+    image_available_semaphores: Vec<vk::Semaphore>,
 
     /// Semaphore signaled when rendering is complete and the image is ready for presentation
-    render_finished_semaphore: vk::Semaphore,
+    render_finished_semaphores: Vec<vk::Semaphore>,
 
     /// Fence signaled when all GPU operations for a frame are complete (used for CPU-GPU sync)
-    in_flight_fence: vk::Fence,
+    in_flight_fences: Vec<vk::Fence>,
+
+    /// Used to know which fence/semaphore to use
+    current_frame: usize,
 
     // ----------------------------
     // Frame State
@@ -318,7 +322,7 @@ impl Renderer {
                 .unwrap()
         };
 
-        let mut image_count = surface_caps.min_image_count + 1;
+        let mut image_count = surface_caps.min_image_count + 1 ;
         if surface_caps.max_image_count > 0 {
             image_count = image_count.min(surface_caps.max_image_count);
         }
@@ -353,9 +357,20 @@ impl Renderer {
             .queue_family_index(queue_family_index)
             .queue_priorities(&priorities)];
         let device_extensions = [khr::swapchain::NAME.as_ptr()];
+        let device_features = vk::PhysicalDeviceFeatures {
+            shader_int16: vk::TRUE,
+            ..Default::default()
+        };
+        let mut device_additional_features = vk::PhysicalDevice16BitStorageFeatures {
+            storage_buffer16_bit_access: vk::TRUE,
+            uniform_and_storage_buffer16_bit_access: vk::TRUE,
+            ..Default::default()
+        };
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
-            .enabled_extension_names(&device_extensions);
+            .enabled_extension_names(&device_extensions)
+            .enabled_features(&device_features)
+            .push_next(&mut device_additional_features);
         let device =
             unsafe { instance.create_device(physical_device, &device_info, None).unwrap() };
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
@@ -386,14 +401,19 @@ impl Renderer {
         // ─────────────────────────────────────────────────────────────
         // Used for GPU-CPU and inter-GPU coordination.
         //
-        let semaphore_info = vk::SemaphoreCreateInfo::default();
-        let image_available_semaphore =
-            unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
-        let render_finished_semaphore =
-            unsafe { device.create_semaphore(&semaphore_info, None).unwrap() };
+        let mut image_available_semaphores: Vec<vk::Semaphore> = Default::default();
+        let mut render_finished_semaphores: Vec<vk::Semaphore> = Default::default();
+        let mut in_flight_fences: Vec<vk::Fence> = Default::default();
 
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-        let in_flight_fence = unsafe { device.create_fence(&fence_info, None).unwrap() };
+
+        for _ in 0..image_count {
+            image_available_semaphores.push(unsafe { device.create_semaphore(&semaphore_info, None).unwrap() });
+            render_finished_semaphores.push(unsafe { device.create_semaphore(&semaphore_info, None).unwrap() });
+            in_flight_fences.push(unsafe { device.create_fence(&fence_info, None).unwrap() });
+        }
+        let current_frame = 0;
 
         //
         // ─────────────────────────────────────────────────────────────
@@ -803,9 +823,10 @@ impl Renderer {
             graphics_pipeline,
             command_pool,
             command_buffers: command_buffers.to_vec(),
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            current_frame,
             current_image_index: 0,
             image_count,
             needs_resize: false,
@@ -849,13 +870,12 @@ impl Renderer {
         }
 
         // Sync with the GPU for the oldest in-flight fence
+        let frame = self.current_frame;
+        let fence = self.in_flight_fences[frame];
         unsafe {
-            self.device
-                .wait_for_fences(&[self.in_flight_fence], true, u64::MAX)
-                .expect("Failed to wait for fence");
-            self.device
-                .reset_fences(&[self.in_flight_fence])
-                .expect("Failed to reset fence");
+            // wait on last use of this frame’s fence, then reset it
+            self.device.wait_for_fences(&[fence], true, 1_000_000_000).expect("Wait for fence");
+            self.device.reset_fences(&[fence]).expect("Reset fences");
         }
 
         // Acquire next swapchain image
@@ -864,7 +884,7 @@ impl Renderer {
                 .acquire_next_image(
                     self.swapchain,
                     u64::MAX,
-                    self.image_available_semaphore,
+                    self.image_available_semaphores[frame],
                     vk::Fence::null(),
                 )
                 .expect("Failed to acquire next image")
@@ -883,9 +903,9 @@ impl Renderer {
         unsafe { std::ptr::copy_nonoverlapping(&ubo_data, self.camera_mapped_ptr, 1) };
 
         // Submit the commands for both compute and graphics
-        let wait_semaphores = [self.image_available_semaphore];
-        let signal_semaphores = [self.render_finished_semaphore];
-        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let wait_semaphores = [self.image_available_semaphores[frame]];
+        let signal_semaphores = [self.render_finished_semaphores[frame]];
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT]; // COMPUTE_SHADER or COLOR_ATTACHMENT_OUTPUT?
         let cmd_buf = [self.command_buffers[image_index as usize]];
         let submit_info = [vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
@@ -895,7 +915,7 @@ impl Renderer {
         ];
         let result = unsafe {
             self.device
-                .queue_submit(self.queue, &submit_info, self.in_flight_fence)
+                .queue_submit(self.queue, &submit_info, self.in_flight_fences[frame])
         };
 
         // Handle out of date and suboptimal swapchain
@@ -909,7 +929,7 @@ impl Renderer {
         // Present framebuffer
         let swapchains = &[self.swapchain];
         let image_indices = &[image_index];
-        let wait_semaphores = [self.render_finished_semaphore];
+        let wait_semaphores = [self.render_finished_semaphores[frame]];
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&wait_semaphores)
             .swapchains(swapchains)
@@ -926,6 +946,9 @@ impl Renderer {
             Err(vk::Result::SUBOPTIMAL_KHR) => { self.needs_resize = true }
             Err(e) => panic!("Failed to present image: {:?}", e),
         }
+
+        // Updating frame count
+        self.current_frame = (self.current_frame + 1) % self.image_count as usize;
     }
 }
 
@@ -946,7 +969,7 @@ impl Renderer {
             }
             _ => surface_caps.current_extent,
         };
-        let present_mode = vk::PresentModeKHR::IMMEDIATE;
+        let present_mode = vk::PresentModeKHR::IMMEDIATE; // either FIFO or IMMEDIATE
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
             .min_image_count(self.image_count)
@@ -1004,6 +1027,7 @@ impl Renderer {
         self.swapchain_image_views = views;
         self.swapchain_extent = extent;
         self.framebuffers = framebuffers;
+        assert_eq!(self.swapchain_images.len(), self.command_buffers.len());
     }
 
     fn recreate_storage_image(&mut self) {
@@ -1232,7 +1256,7 @@ impl Renderer {
                 );
 
                 let (w, h) = self.storage_image_extent;
-                self.device.cmd_dispatch(cmd_buf, (w + 7) / 8, (h + 7) / 8, 1);
+                self.device.cmd_dispatch(cmd_buf, (w + 15) / 16, (h + 15) / 16, 1);
 
                 // Barrier between compute and graphics
                 let barrier = vk::ImageMemoryBarrier::default()

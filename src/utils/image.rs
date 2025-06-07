@@ -73,7 +73,7 @@ impl<T> Img<T> {
 }
 
 impl Img<f32> {
-    pub fn from_node(node: &SafeNode, width: u32, seed: i32) -> Self {
+    pub fn from_node(node: &SafeNode, width: u32, scaling: f32, seed: i32) -> Self {
         let mut data = vec![0.0f32; (width * width) as usize];
         node.gen_uniform_grid_2d(
             &mut data,
@@ -81,7 +81,7 @@ impl Img<f32> {
             (width as i32) / -2,
             width as i32,
             width as i32,
-            0.8e-2,
+            scaling * (0.8e-2),
             seed,
         );
         Self {

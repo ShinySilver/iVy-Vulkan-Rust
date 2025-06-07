@@ -29,7 +29,7 @@ pub struct SparseBitmask {
 
 impl SparseBitmask {
     pub fn new(tree_depth: usize) -> Self {
-        let mut nodes = MemoryPool::<Node>::new(1024 * 1024);
+        let mut nodes = MemoryPool::<Node>::new(16 * 1024 * 1024);
         let (_, root_index) = nodes.allocate();
         Self {
             tree_depth,

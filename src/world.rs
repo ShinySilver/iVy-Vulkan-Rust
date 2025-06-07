@@ -86,18 +86,18 @@ impl World {
         /* Generating a base heightmap */
         let tree_code = "IgAAAABAAACAPxoAARsAGwAZABkAEwDNzEw+DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwAAAAAAAAAAgD8BHQAaAAAAAIA/ARwAAQUAAQAAAAAAAAAAAAAAAAAAAAAAAAAAMzPrQQAAAIA/AOxRGEAAMzMzQA==";
         let node = SafeNode::from_encoded_node_tree(tree_code).unwrap();
-        let heightmap = Img::from_node(&node, self.width, self.seed);
+        let heightmap = Img::from_node(&node, self.width, 1024. / self.width as f32, self.seed);
 
         /* Using it to build a hard continent shape */
         let continent_shape = heightmap.map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } });
         //continent_shape.to_file_and_show("continent_shape.png");
 
         /* Building the bottom envelope */
-        let bottom_envelope = continent_shape.distance_transform().map(|_, _, h| { h * 2. });
+        let bottom_envelope = continent_shape.distance_transform().map(|_, _, h| { h * 2. * 1024. / self.width as f32 });
         //bottom_envelope.map(|x, y, v| { (v / 200. * 255.) as u8 }).to_file_and_show("dist_to_sea.png");
 
         /* Building a very simple top envelope */
-        let top_envelope = heightmap.map(|x, y, h| { (h + 1.) / 2. * 255. });
+        let top_envelope = heightmap.map(|x, y, h| { (h + 1.) / 2. * 255. * self.width as f32 / 1024. });
 
         self.bottom_heightmap = bottom_envelope;
         self.top_heightmap = top_envelope;
@@ -167,7 +167,7 @@ impl World {
                         let local_depth = *self.bottom_heightmap.get(local_pos.xy()) as u32;
                         let is_solid = if self.is_generated(local_pos) { self.data.get(local_pos) & 0x7fu16 != (Material::Air as u16) } else {
                             (local_pos.z <= self.width / 2 + local_height)
-                                && (local_pos.z >= self.width / 2 - local_depth) && local_height !=0 && local_depth != 0
+                                && (local_pos.z >= self.width / 2 - local_depth) && local_height != 0 && local_depth != 0
                         };
                         let distance = offset.as_vec3().length();
                         if !is_solid && distance > 0.0 {

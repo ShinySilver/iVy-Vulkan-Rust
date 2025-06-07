@@ -1,6 +1,7 @@
 use std::{env, process};
 use std::fs;
 use std::path::{Path, PathBuf};
+use spirv_tools::opt::Optimizer;
 use walkdir::WalkDir;
 
 fn main() {
@@ -19,7 +20,6 @@ fn main() {
     {
         let path = entry.path();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-
         let shader_kind = match extension {
             "vert" => shaderc::ShaderKind::Vertex,
             "frag" => shaderc::ShaderKind::Fragment,
@@ -27,22 +27,32 @@ fn main() {
             "geom" => shaderc::ShaderKind::Geometry,
             "tesc" => shaderc::ShaderKind::TessControl,
             "tese" => shaderc::ShaderKind::TessEvaluation,
-            _ => continue, // skip unsupported files
+            _ => continue,
         };
 
         let source = fs::read_to_string(path).expect("Failed to read shader");
         let filename = path.file_name().unwrap().to_str().unwrap();
 
-        let compiled_result = compiler
+        // 1) compile GLSL/HLSL → SPIR-V
+        let compiled = compiler
             .compile_into_spirv(&source, shader_kind, filename, "main", Some(&options))
             .unwrap_or_else(|e| {
                 eprintln!("Could not compile {filename}: {e}");
                 process::exit(1);
             });
 
-        let spv_path = out_dir.join(format!("{}.spv", filename));
-        fs::write(&spv_path, compiled_result.as_binary_u8())
-            .expect("Failed to write compiled SPIR-V");
+        // 2) SPIR-V → optimized SPIR-V
+        let mut optimizer = spirv_tools::opt::compiled::CompiledOptimizer::default();
+        optimizer.register_performance_passes();
+        let optimized_binary = optimizer.optimize(compiled.as_binary(), &mut |msg| {
+            eprintln!("[compiled] optimizer message: {:#?}", msg);
+        }, None).expect("Could not optimize shader.");
+
+        // 3) write out the optimized shader
+        let spv_path = out_dir.join(format!("{filename}.spv"));
+        fs::write(&spv_path, optimized_binary.as_bytes()).expect("Failed to write optimized SPIR-V");
+        //fs::write(&spv_path, compiled.as_binary_u8()).expect("Failed to write optimized SPIR-V");
+
         println!("cargo:rerun-if-changed={}", path.display());
     }
 }

@@ -10,10 +10,10 @@ pub(crate) struct Node {
 
 impl Node {
     fn is_leaf(&self) -> bool {
-        self.data & (0b1u32 << 31) == 0
+        self.data & 1 == 0
     }
     fn children_index(&self) -> usize {
-        (self.data & !(0b1u32 << 31)) as usize
+        (self.data >> 1) as usize
     }
 }
 
@@ -164,10 +164,10 @@ impl<T: Default + Copy + PartialEq> SparseTree<T> {
         {
             let parent = self.nodes.acquire_mut(parent_index);
             parent.bitmask |= 0x1u64 << child_xyz;
-            parent.data = parent.data & (0x1u32 << 31) | (new_child_array_index as u32) & !(0x1u32 << 31);
+            parent.data = parent.data & 1 | (new_child_array_index as u32) << 1;
         }
         let new_child = self.nodes.acquire_mut(new_child_index);
-        if stack_depth + 1 == self.tree_depth { new_child.data |= 1u32 << 31; }
+        if stack_depth + 1 == self.tree_depth { new_child.data |= 1; }
         (new_child, new_child_index)
     }
 
@@ -193,7 +193,7 @@ impl<T: Default + Copy + PartialEq> SparseTree<T> {
         {
             let parent = self.nodes.acquire_mut(parent_index);
             parent.bitmask |= 0x1u64 << child_xyz;
-            parent.data = parent.data & (0x1u32 << 31) | (new_child_array_index as u32) & !(0x1u32 << 31);
+            parent.data = parent.data & 1 | (new_child_array_index as u32) << 1;
         }
         (self.voxels.acquire_mut(new_child_index), new_child_index)
     }

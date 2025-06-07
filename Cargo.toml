@@ -37,4 +37,5 @@ rand = "0.9.1"
 
 [build-dependencies]
 shaderc = "0.8"
+spirv-tools = "0.10.0"
 walkdir = "2.5.0"
