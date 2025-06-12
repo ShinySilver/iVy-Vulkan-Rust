@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_shader_16bit_storage: require
-layout (local_size_x = 16, local_size_y = 16) in;
+
+layout (local_size_x = 8, local_size_y = 8) in;
 
 #define SIZEOF_NODE 12
 #define NODE_WIDTH 4
@@ -18,19 +19,19 @@ struct Node {
     uint header;
 };
 
-layout (rgba8, set = 0, binding = 0) uniform image2D img;
+layout (set = 0, binding = 0) writeonly uniform image2D img;
 
-layout (set = 0, binding = 1) uniform CameraData {
+layout (set = 0, binding = 1) readonly uniform CameraData {
     vec4 position;
     mat4 invView;
     mat4 invProj;
 } camera;
 
-layout (std430, set = 0, binding = 2) buffer Nodes {
+layout (std430, set = 0, binding = 2) readonly buffer Nodes {
     Node node_pool[];
 };
 
-layout (std430, set = 0, binding = 3) buffer Voxels {
+layout (std430, set = 0, binding = 3) readonly buffer Voxels {
     uint16_t voxel_pool[];
 };
 
@@ -47,6 +48,86 @@ float AABBIntersect(vec3 bmin, vec3 bmax, vec3 orig, vec3 invdir, out vec3 aabb_
     aabb_mask = step(vmin, vec3(tmin));
     return max(0.0, tmin);
 }
+
+vec2 hash2(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float n00 = dot(hash2(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0));
+    float n10 = dot(hash2(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0));
+    float n01 = dot(hash2(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0));
+    float n11 = dot(hash2(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0));
+    float nx0 = mix(n00, n10, u.x);
+    float nx1 = mix(n01, n11, u.x);
+    return mix(nx0, nx1, u.y);
+}
+
+// 2. FBM with octave rotation and normalization to reduce artifacts
+float fbm(vec2 p) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float totalAmp = 0.0;
+    // small rotation between octaves to break axis-aligned artifacts
+    const float ROT = 0.5;
+    mat2 rot = mat2(cos(ROT), -sin(ROT), sin(ROT), cos(ROT));
+    for (int i = 0; i < 5; i++) {
+        value += amplitude * noise(p);
+        p = rot * p * 2.0;
+        totalAmp += amplitude;
+        amplitude *= 0.5;
+    }
+    return value / totalAmp;
+}
+
+// Main skybox function
+vec3 skybox(vec3 ray_pos, vec3 ray_dir, vec3 sun_dir, float u_time) {
+    // 1. Dawn gradient
+    vec3 skyTop     = vec3(0.2, 0.4, 0.8);
+    vec3 skyHorizon = vec3(1.0, 0.6, 0.4);
+    float horizonModifier = 0.3;
+    float t = smoothstep(0.0, 0.5, ray_dir.y+horizonModifier);
+    vec3 color = mix(skyHorizon, skyTop, t);
+
+    // 2. Cloud Sea (only above horizon)
+    float cloudScale = 0.2;
+    float cloudSpeed = 0.0005;
+    vec2 cloudUV = ray_dir.xy * cloudScale + vec2(u_time * cloudSpeed);
+    float cloudNoise = fbm(cloudUV);
+    float cloudMask = smoothstep(0.4, 0.6, cloudNoise) * smoothstep(0.0, 0.5, ray_dir.y+horizonModifier);
+    vec3 cloudColor = mix(vec3(1.0), vec3(0.9, 0.7, 0.8), cloudNoise);
+    color = mix(color, cloudColor, cloudMask * 0.5);
+
+    // 3. Storm Vortex (beneath island)
+    float vortexAngle  = atan(ray_dir.z, ray_dir.x);        // range [-PI, PI]
+    float vortexRadius = length(ray_dir.xz);
+    float rotationSpeed = 0.2;
+    float swirlCount    = 3.0;
+    float angle         = vortexAngle + u_time * rotationSpeed;
+    float normAngle = mod(angle / (2.0 * 3.14159265) * swirlCount, 1.0);
+    float u = normAngle;
+    float v = vortexRadius * 4.0 + u_time * 0.05;
+    vec2 p1 = vec2(u, v);
+    vec2 p2 = vec2(u - 1.0, v);
+    float n1 = fbm(p1);
+    float n2 = fbm(p2);
+    float stormNoise = mix(n1, n2, u);
+    float stormMask = smoothstep(0.2, 0.6, vortexRadius) * (1.0 - smoothstep(0.0, 0.3, ray_dir.y+horizonModifier + 0.2));
+    vec3 stormColor = mix(skyHorizon, vec3(0.6, 0.4, 0.8), stormNoise*3.3);
+    color = mix(color, stormColor, stormMask);
+
+    // 4. Sun glow
+    float sunAmount = max(dot(ray_dir, sun_dir.xzy), 0.0);
+    color += vec3(1.0, 0.8, 0.6) * pow(sunAmount, 16.0) * 0.5;
+
+    return color;
+}
+
+
 /**
  * Our raytracing function
  */
@@ -210,7 +291,9 @@ vec3(0.40, 1.00, 0.40), // DEBUG_GREEN
 vec3(0.40, 0.40, 1.00), // DEBUG_BLUE
 vec3(0.55, 0.55, 0.55), // STONE
 vec3(0.42, 0.32, 0.25), // DIRT
-vec3(0.30, 0.59, 0.31)  // GRASS
+vec3(0.30, 0.59, 0.31), // GRASS
+vec3(0.42, 0.26, 0.15), // LOG
+vec3(0.32, 0.56, 0.18)  // LEAVES
 };
 
 /**
@@ -228,16 +311,9 @@ void main() {
     vec3 ray_pos = camera.position.xyz;
     uint voxel_index = raytrace(ray_pos, ray_dir);
 
-    if (voxel_index >= 0xfffffffcu) {imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(colors[voxel_index - 0xfffffffcu], 0)); return;}
-
-    uint voxel = uint(voxel_pool[voxel_index]);
-    uint encoded_color = voxel & 0x7fu;
-    vec3 color = colors[encoded_color < 7 ? encoded_color : 1].xyz;
-    uint encoded_normal = (voxel >> 7);
-    vec3 normal = normalize(vec3(float((encoded_normal >> 6) & 0x7u), float((encoded_normal >> 3) & 0x7u), float(encoded_normal & 0x7u)) / 3.5 - 1.0);
-
     // sun direction
-    float angle = camera.position.w * 1.0;
+    float u_time = camera.position.w;
+    float angle = u_time * 1.0;
     float c = cos(angle);
     float s = sin(angle);
     const vec3 base_sun_direction = normalize(vec3(0.4, 0.4, 1.0));
@@ -248,6 +324,19 @@ void main() {
                                    ));
     vec3 is_small = step(abs(sun_direction), vec3(EPSILON));
     sun_direction = sun_direction + is_small * EPSILON * 2;
+
+
+    if (voxel_index >= 0xfffffffcu) {
+        vec3 sky_color = skybox(ray_pos, ray_dir, sun_direction, u_time);
+        imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(sky_color, 0)); // colors[voxel_index - 0xfffffffcu]
+        return;
+    }
+
+    uint voxel = uint(voxel_pool[voxel_index]);
+    uint encoded_color = voxel & 0x7fu;
+    vec3 color = colors[encoded_color < 9 ? encoded_color : 1].xyz;
+    uint encoded_normal = (voxel >> 7);
+    vec3 normal = normalize(vec3(float((encoded_normal >> 6) & 0x7u), float((encoded_normal >> 3) & 0x7u), float(encoded_normal & 0x7u)) / 3.5 - 1.0);
 
     // diffuse shading
     float diffuse = 0.5 + dot(normalize(normal), normalize(sun_direction.xyz)) / 2;

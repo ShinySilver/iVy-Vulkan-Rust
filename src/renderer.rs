@@ -10,7 +10,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::camera::{Camera, Projection};
 use crate::utils::sparse_tree::Node;
-use crate::world::Voxel;
+use crate::voxels::Voxel;
 
 pub struct Renderer {
     // ----------------------------
@@ -1256,7 +1256,7 @@ impl Renderer {
                 );
 
                 let (w, h) = self.storage_image_extent;
-                self.device.cmd_dispatch(cmd_buf, (w + 15) / 16, (h + 15) / 16, 1);
+                self.device.cmd_dispatch(cmd_buf, (w + 7) / 8, (h + 7) / 8, 1);
 
                 // Barrier between compute and graphics
                 let barrier = vk::ImageMemoryBarrier::default()

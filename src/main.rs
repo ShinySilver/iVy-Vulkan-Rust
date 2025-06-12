@@ -19,7 +19,8 @@ use crate::utils::sparse_bitmask::SparseBitmask;
 mod camera;
 mod renderer;
 mod utils;
-pub mod world;
+mod world;
+mod voxels;
 
 use crate::utils::sparse_tree::*;
 use crate::world::World;
@@ -38,7 +39,7 @@ fn main() {
     let mut input_helper = WinitInputHelper::new();
 
     // Generating world
-    let world = World::new(6, 145904);
+    let world = World::new(5, 145904);
     info!("World has a memory footprint of {} MB ({} MB for nodes, {} MB for leaves)",
         (world.data.nodes.size()*96 + world.data.voxels .size()*16) as f64 / 8. / 1e6,
         (world.data.nodes.size()*96) as f64 / 8. / 1e6, (world.data.voxels.size()*16) as f64 / 8. / 1e6);

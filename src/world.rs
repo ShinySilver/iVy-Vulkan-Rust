@@ -1,29 +1,19 @@
+use std::cmp::PartialEq;
 use std::time::Instant;
 use fastnoise2::generator::*;
 use fastnoise2::SafeNode;
 use glam::{ivec3, uvec2, uvec3, vec2, vec3, UVec2, UVec3, Vec3, Vec3Swizzles};
 use log::{info, warn};
+use rand::{random, Rng};
 use crate::utils::image::Img;
 use crate::utils::image_transforms;
 use crate::utils::sparse_bitmask::SparseBitmask;
 use crate::utils::sparse_tree::{Node, SparseTree};
-
-pub type Voxel = u16;
-
-#[repr(u8)]
-enum Material {
-    Air,
-    DebugRed,
-    DebugGreen,
-    DebugBlue,
-    Stone,
-    Dirt,
-    Grass,
-}
+use crate::voxels::*;
 
 pub struct World {
     /* Voxel data. The only data structure that is sent to the GPU. */
-    pub data: SparseTree<u16>,
+    pub data: SparseTree<Voxel>,
 
     /* Per-voxel metadata. Not sent to the GPU */
     is_generated: SparseBitmask, // Used to differentiate "air" voxels from "not generated" voxels
@@ -58,6 +48,9 @@ impl World {
         world.pre_generate_voxels();
         info!("Pre-generating voxels took {:?}", t.elapsed());
         let t = Instant::now();
+        world.pre_generate_decoration();
+        info!("Pre-generating decoration took {:?}", t.elapsed());
+        let t = Instant::now();
         world.pre_generate_normals();
         info!("Pre-generating normals took {:?}", t.elapsed());
         world
@@ -74,7 +67,7 @@ impl World {
     pub fn is_generated(&self, pos: UVec3) -> bool { self.is_generated.get(pos) }
 
     pub fn is_solid(&self, pos: UVec3) -> bool {
-        if self.is_generated(pos) { self.data.get(pos) & 0x7fu16 != Material::Air as u16 } else {
+        if self.is_generated(pos) { self.data.get(pos).material() != Material::Air } else {
             pos.z <= *self.top_heightmap.get(pos.xy()) as u32 && pos.z >= *self.bottom_heightmap.get(pos.xy()) as u32
         }
     }
@@ -93,7 +86,7 @@ impl World {
         //continent_shape.to_file_and_show("continent_shape.png");
 
         /* Building the bottom envelope */
-        let bottom_envelope = continent_shape.distance_transform().map(|_, _, h| { h * 2. * 1024. / self.width as f32 });
+        let bottom_envelope = continent_shape.distance_transform().map(|_, _, h| { h * 2. });
         //bottom_envelope.map(|x, y, v| { (v / 200. * 255.) as u8 }).to_file_and_show("dist_to_sea.png");
 
         /* Building a very simple top envelope */
@@ -136,7 +129,7 @@ impl World {
                 let top_end = center_z + height;
 
                 for z in top_start..=top_end {
-                    self.data.set(uvec3(x, y, z), if top_end - top_start > 1 { Material::Stone } else { Material::Grass } as u16);
+                    self.data.set(uvec3(x, y, z), if top_end - top_start > 1 { Material::Stone.into() } else { Material::Grass.into() });
                     self.is_generated.set(uvec3(x, y, z), true);
                 }
 
@@ -144,8 +137,42 @@ impl World {
                 let bottom_end = center_z - min_neighbour_depth;
 
                 for z in bottom_start..=bottom_end {
-                    self.data.set(uvec3(x, y, z), Material::Stone as u16);
+                    self.data.set(uvec3(x, y, z), Material::Stone.into());
                     self.is_generated.set(uvec3(x, y, z), true);
+                }
+            }
+        }
+    }
+
+    fn pre_generate_decoration(&mut self) {
+        let center_z = self.width / 2;
+        let mut rng = rand::rng();
+        for x in 0..self.width {
+            for y in 0..self.width {
+                let pos = uvec2(x, y);
+                let height = *self.top_heightmap.get(pos) as u32;
+                let pos = uvec3(x, y, center_z + height);
+                if rng.random::<f64>() < 5e-4 && self.is_generated(pos) && self.data.get(pos).material() == Material::Grass {
+                    // trunk
+                    for i in 0..16 {
+                        let target_pos = pos + uvec3(0, 0, i);
+                        self.data.set(target_pos, Material::OakLog.into());
+                        self.is_generated.set(target_pos, true);
+                    }
+                    // leaves
+                    for i in 0..16i32 {
+                        for j in 0..16i32 {
+                            for k in 0..16i32 {
+                                if (i - 8) * (i - 8) + (j - 8) * (j - 8) + (k - 8) * (k - 8) <= 8 * 8 {
+                                    let target_pos = uvec3(pos.x + i as u32 - 8, pos.y + j as u32 - 8, pos.z + k as u32 + 12);
+                                    if !self.is_solid(target_pos) {
+                                        self.data.set(target_pos, Material::OakLeaves.into());
+                                        self.is_generated.set(target_pos, true);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -157,6 +184,7 @@ impl World {
         self.data.for_each(|pos, voxel| {
             let radius = 2;
             let mut normal = Vec3::default();
+            let category = self.data.get(pos).material().category();
             for dx in -radius..=radius {
                 for dy in -radius..=radius {
                     for dz in -radius..=radius {
@@ -165,9 +193,13 @@ impl World {
                         let local_pos = (pos.as_ivec3() + offset).as_uvec3();
                         let local_height = *self.top_heightmap.get(local_pos.xy()) as u32;
                         let local_depth = *self.bottom_heightmap.get(local_pos.xy()) as u32;
-                        let is_solid = if self.is_generated(local_pos) { self.data.get(local_pos) & 0x7fu16 != (Material::Air as u16) } else {
-                            (local_pos.z <= self.width / 2 + local_height)
-                                && (local_pos.z >= self.width / 2 - local_depth) && local_height != 0 && local_depth != 0
+                        let is_solid = {
+                            if self.is_generated(local_pos) {
+                                self.data.get(local_pos).material().category() == category
+                            } else if category == MaterialCategory::Terrain {
+                                (local_pos.z <= self.width / 2 + local_height)
+                                    && (local_pos.z >= self.width / 2 - local_depth) && local_height != 0 && local_depth != 0
+                            } else { false }
                         };
                         let distance = offset.as_vec3().length();
                         if !is_solid && distance > 0.0 {
@@ -177,15 +209,12 @@ impl World {
                     }
                 }
             }
-            copy.set(pos, voxel | (Self::encode_normal(normal.normalize()) << 7));
+            let mut voxel = voxel.clone();
+            voxel.set_normal(normal.normalize());
+            copy.set(pos, voxel);
             count += 1;
         });
         info!("Generated {} voxels !", count);
         self.data = copy;
-    }
-
-    fn encode_normal(normal: Vec3) -> u16 {
-        let map = |v: f32| (((v + 1.0) * 3.5).round() as u16).min(0b111u16);
-        (map(normal.x) << 6) | (map(normal.y) << 3) | map(normal.z)
     }
 }

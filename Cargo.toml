@@ -34,6 +34,7 @@ fastnoise2 = "0.3.1"
 image = "0.25.6"
 opener = "0.7.2"
 rand = "0.9.1"
+num_enum = "0.7.3"
 
 [build-dependencies]
 shaderc = "0.8"
