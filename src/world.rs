@@ -1,15 +1,16 @@
-use std::cmp::PartialEq;
-use std::time::Instant;
-use fastnoise2::generator::*;
-use fastnoise2::SafeNode;
-use glam::{ivec3, uvec2, uvec3, vec2, vec3, UVec2, UVec3, Vec3, Vec3Swizzles};
-use log::{info, warn};
-use rand::{random, Rng};
 use crate::utils::image::Img;
-use crate::utils::image_transforms;
 use crate::utils::sparse_bitmask::SparseBitmask;
 use crate::utils::sparse_tree::{Node, SparseTree};
 use crate::voxels::*;
+use fast_poisson::Poisson2D;
+use fastnoise2::generator::*;
+use fastnoise2::SafeNode;
+use glam::{ivec3, uvec2, uvec3, vec2, vec3, IVec3, UVec2, UVec3, Vec3, Vec3Swizzles};
+use log::{info, warn};
+use rand::{random, Rng};
+use std::cmp::PartialEq;
+use std::ops::{Add, Div};
+use std::time::Instant;
 
 pub struct World {
     /* Voxel data. The only data structure that is sent to the GPU. */
@@ -64,10 +65,8 @@ impl World {
 
     pub fn generate(&mut self, coord: UVec3) -> bool { todo!() }
 
-    pub fn is_generated(&self, pos: UVec3) -> bool { self.is_generated.get(pos) }
-
     pub fn is_solid(&self, pos: UVec3) -> bool {
-        if self.is_generated(pos) { self.data.get(pos).material() != Material::Air } else {
+        if self.is_generated.get(pos) { self.data.get(pos).material() != Material::Air } else {
             pos.z <= *self.top_heightmap.get(pos.xy()) as u32 && pos.z >= *self.bottom_heightmap.get(pos.xy()) as u32
         }
     }
@@ -145,30 +144,34 @@ impl World {
     }
 
     fn pre_generate_decoration(&mut self) {
+        let tree_spacing = 14;
         let center_z = self.width / 2;
-        let mut rng = rand::rng();
-        for x in 0..self.width {
-            for y in 0..self.width {
-                let pos = uvec2(x, y);
-                let height = *self.top_heightmap.get(pos) as u32;
-                let pos = uvec3(x, y, center_z + height);
-                if rng.random::<f64>() < 5e-4 && self.is_generated(pos) && self.data.get(pos).material() == Material::Grass {
-                    // trunk
-                    for i in 0..16 {
-                        let target_pos = pos + uvec3(0, 0, i);
-                        self.data.set(target_pos, Material::OakLog.into());
-                        self.is_generated.set(target_pos, true);
-                    }
-                    // leaves
-                    for i in 0..16i32 {
-                        for j in 0..16i32 {
-                            for k in 0..16i32 {
-                                if (i - 8) * (i - 8) + (j - 8) * (j - 8) + (k - 8) * (k - 8) <= 8 * 8 {
-                                    let target_pos = uvec3(pos.x + i as u32 - 8, pos.y + j as u32 - 8, pos.z + k as u32 + 12);
-                                    if !self.is_solid(target_pos) {
-                                        self.data.set(target_pos, Material::OakLeaves.into());
-                                        self.is_generated.set(target_pos, true);
-                                    }
+        let mut sampler = Poisson2D::new()
+            .with_dimensions([self.width as f64; 2], tree_spacing as f64)
+            .with_seed(self.seed as u64);
+        let points = sampler.generate().iter().map(|&p| uvec2(p[0] as u32, p[1] as u32)).collect::<Vec<UVec2>>();
+        for pos in points {
+            let height = *self.top_heightmap.get(pos) as u32;
+            let pos = uvec3(pos.x, pos.y, center_z + height);
+            if self.is_generated.get(pos) && self.data.get(pos).material() == Material::Grass {
+                for i in 0..16 {
+                    let delta = uvec3(0, 0, i);
+                    let target_pos = pos + delta;
+                    self.data.set(target_pos, Material::OakLog.into());
+                    self.is_generated.set(target_pos, true);
+                }
+
+                // leaves
+                let radius = 16;
+                let half_radius = radius / 2;
+                for i in 0..16i32 {
+                    for j in 0..16i32 {
+                        for k in 0..16i32 {
+                            if (ivec3(i, j, k) - half_radius).length_squared() <= half_radius.pow(2) {
+                                let target_pos = uvec3(pos.x + i as u32 - 8, pos.y + j as u32 - 8, pos.z + k as u32 + 12);
+                                if !self.is_solid(target_pos) {
+                                    self.data.set(target_pos, Material::OakLeaves.into());
+                                    self.is_generated.set(target_pos, true);
                                 }
                             }
                         }
@@ -194,7 +197,7 @@ impl World {
                         let local_height = *self.top_heightmap.get(local_pos.xy()) as u32;
                         let local_depth = *self.bottom_heightmap.get(local_pos.xy()) as u32;
                         let is_solid = {
-                            if self.is_generated(local_pos) {
+                            if self.is_generated.fast_unsafe_lookup(local_pos) {
                                 self.data.get(local_pos).material().category() == category
                             } else if category == MaterialCategory::Terrain {
                                 (local_pos.z <= self.width / 2 + local_height)

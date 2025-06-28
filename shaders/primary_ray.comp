@@ -6,7 +6,7 @@ layout (local_size_x = 8, local_size_y = 8) in;
 #define SIZEOF_NODE 12
 #define NODE_WIDTH 4
 #define NODE_WIDTH_SQRT 2
-#define WORLD_WIDTH (4096)
+#define WORLD_WIDTH (256)
 #define MAX_DEPTH 6
 
 #define EPSILON 1e-6f
@@ -344,7 +344,7 @@ void main() {
 
     // secondary ray
     float shadow = 1.0;
-    ray_pos = ray_pos + normal.xzy * 3.0;
+    ray_pos = ray_pos + normal.xzy * 4.0;
     uint sun_voxel_index = raytrace(ray_pos, sun_direction.xzy);
     if (sun_voxel_index < 0xfffffffcu) shadow = 0.5; // Reduced brightness for shadows
 

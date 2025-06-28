@@ -8,13 +8,13 @@ use winit::platform::x11::WindowBuilderExtX11;
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-use std::ops::{Add, Mul};
-use std::time::{Duration, Instant};
+use crate::utils::sparse_bitmask::SparseBitmask;
 use glam::{uvec3, vec3, UVec3};
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use crate::utils::sparse_bitmask::SparseBitmask;
+use std::ops::{Add, Mul};
+use std::time::{Duration, Instant};
 
 mod camera;
 mod renderer;
@@ -39,7 +39,9 @@ fn main() {
     let mut input_helper = WinitInputHelper::new();
 
     // Generating world
-    let world = World::new(5, 145904);
+    let world_depth = 4u32;
+    let world_width = 4f32.powf(world_depth as f32);
+    let world = World::new(world_depth, 145904);
     info!("World has a memory footprint of {} MB ({} MB for nodes, {} MB for leaves)",
         (world.data.nodes.size()*96 + world.data.voxels .size()*16) as f64 / 8. / 1e6,
         (world.data.nodes.size()*96) as f64 / 8. / 1e6, (world.data.voxels.size()*16) as f64 / 8. / 1e6);
@@ -47,7 +49,7 @@ fn main() {
     // Creating renderer & camera
     let mut renderer = renderer::Renderer::new(&window, world.raw_node_data(), world.raw_voxel_data());
     let mut camera = camera::Camera::new(
-        vec3(0.0, 800.0, 512.0),
+        vec3(0.0, 0.8 * world_width, 0.5 * world_width),
         vec3(1.0, -0.45, -0.5),
         glam::Vec3::Y,
     );

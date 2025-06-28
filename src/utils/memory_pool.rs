@@ -93,7 +93,7 @@ impl<T: Default + Copy> MemoryPool<T> {
 impl<T: Default + Copy> Default for MemoryPool<T> {
     fn default() -> Self {
         Self {
-            memory: Vec::with_capacity(1024 * 1024 * 512),
+            memory: Vec::with_capacity(1024 * 1024 * 1024),
             holes: core::array::from_fn(|_| Vec::new()),
         }
     }

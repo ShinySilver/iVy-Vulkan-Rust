@@ -1,6 +1,5 @@
-use glam::{uvec3, UVec3};
-use log::{error, info, trace};
 use crate::utils::memory_pool::MemoryPool;
+use glam::{uvec3, UVec3};
 
 #[derive(Copy, Clone)]
 struct Node {
@@ -24,6 +23,9 @@ pub struct SparseBitmask {
     tree_depth: usize,
     root_index: usize,
     nodes: MemoryPool<Node>,
+    cached_pos: UVec3,
+    cached_width: u32,
+    cached_index: usize,
 }
 
 
@@ -35,6 +37,7 @@ impl SparseBitmask {
             tree_depth,
             root_index,
             nodes,
+            ..Default::default()
         }
     }
 
@@ -161,6 +164,43 @@ impl SparseBitmask {
     pub fn get(&self, pos: UVec3) -> bool { self.lookup(pos).0 }
 
     pub fn size(&self) -> usize { self.nodes.size() }
+
+    pub(crate) fn fast_unsafe_lookup(&mut self, pos: UVec3) -> bool {
+        let origin = self.cached_pos;
+        let width = self.cached_width;
+        if (pos.x >= origin.x && pos.x < origin.x + width) &&
+            (pos.y >= origin.y && pos.y < origin.y + width) &&
+            (pos.z >= origin.z && pos.z < origin.z + width)
+        {
+            let node = self.nodes.acquire(self.cached_index);
+            let child_local_pos = (pos & (self.cached_width * 2 - 1)) / self.cached_width;
+            let child_xyz = child_local_pos.dot(uvec3(1, 2, 4));
+            let is_uniform = (node.child_uniform & (0x1u8 << child_xyz) != 0);
+            let is_set = (node.child_type & (0x1u8 << child_xyz) != 0);
+            return (is_set);
+        }
+        let mut stack = Vec::with_capacity(self.tree_depth);
+        let mut node = self.nodes.acquire(self.root_index);
+        stack.push(self.root_index);
+        while stack.len() <= self.tree_depth {
+            let child_width = 0x1u32 << (self.tree_depth - stack.len());
+            let child_local_pos = (pos & (child_width * 2 - 1)) / child_width; // TODO: improve: check MSB of a bitmask
+            let child_xyz = child_local_pos.dot(uvec3(1, 2, 4));
+            let is_uniform = (node.child_uniform & (0x1u8 << child_xyz) != 0);
+            let is_set = (node.child_type & (0x1u8 << child_xyz) != 0);
+            if (is_uniform) {
+                self.cached_index = stack.pop().unwrap();
+                self.cached_width = child_width;
+                self.cached_pos = pos & !(child_width - 1);
+                return is_set;
+            }
+            let child_index = node.children_index
+                + (!node.child_uniform & !(u8::MAX << child_xyz)).count_ones();
+            node = self.nodes.acquire(child_index as usize);
+            stack.push(child_index as usize);
+        }
+        panic!("Unexpected tree exit!");
+    }
 
     fn lookup(&self, pos: UVec3) -> (bool, &Node, Vec<usize>) {
         let mut stack = Vec::with_capacity(self.tree_depth);

@@ -113,9 +113,9 @@ impl<T: Default + Copy + PartialEq> SparseTree<T> {
                     let child_xyz = i as u32;
 
                     // Decode position
-                    let dx = child_xyz % 4;
-                    let dy = (child_xyz / 4) % 4;
-                    let dz = (child_xyz / 16) % 4;
+                    let dx = child_xyz & 0b11;
+                    let dy = (child_xyz >> 2) & 0b11;
+                    let dz = (child_xyz >> 4) & 0b11;
                     let child_offset = UVec3::new(dx, dy, dz);
 
                     let child_width = 1 << ((self.tree_depth - depth - 1) * 2);
