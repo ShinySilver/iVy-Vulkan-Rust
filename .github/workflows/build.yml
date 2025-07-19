@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04] # TODO: windows-latest & macos-latest
         channel: [stable]
     runs-on: ${{ matrix.os }}
 
@@ -40,8 +40,10 @@ jobs:
     - name: Install Vulkan on Linux
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libvulkan-dev vulkan-utils
+        wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+        sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+        sudo apt update
+        sudo apt install vulkan-sdk
 
     - name: Install Vulkan SDK on macOS
       if: runner.os == 'macOS'
