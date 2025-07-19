@@ -16,6 +16,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         channel: [stable]
@@ -35,6 +36,26 @@ jobs:
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Install Vulkan on Linux
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libvulkan-dev vulkan-utils
+
+    - name: Install Vulkan SDK on macOS
+      if: runner.os == 'macOS'
+      run: |
+        brew update
+        brew install --cask vulkan-sdk
+        
+    - name: Install Vulkan SDK on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco install vulkan-sdk -y
+        # Ensure the installer’s environment variables are loaded:
+        refreshenv
 
     - name: Build
       run: cargo build --verbose
