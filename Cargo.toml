@@ -40,5 +40,4 @@ enum-assoc = "1.2.4"
 
 [build-dependencies]
 shaderc = "0.8"
-spirv-tools = "0.10.0"
 walkdir = "2.5.0"
