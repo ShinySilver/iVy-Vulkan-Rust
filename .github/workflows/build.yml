@@ -46,6 +46,6 @@ jobs:
       if: matrix.channel == 'stable' && runner.os == 'Linux'
       uses: actions/upload-artifact@v4
       with:
-        name: ivy-raytracer-rs-${{ toLower(runner.os) }}
+        name: ivy-raytracer-rs-${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'linux' }}
         path: target/release/iVy${{ runner.os == 'Windows' && '.exe' || '' }}
 
