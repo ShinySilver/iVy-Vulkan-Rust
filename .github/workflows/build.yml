@@ -42,8 +42,8 @@ jobs:
       if: matrix.channel == 'stable'
       run: cargo build --release
 
-    - name: Upload Release Binary (Linux)
-      if: matrix.channel == 'stable' && runner.os == 'Linux'
+    - name: Upload Release Binary
+      if: matrix.channel == 'stable'
       uses: actions/upload-artifact@v4
       with:
         name: ivy-raytracer-rs-${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'linux' }}
