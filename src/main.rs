@@ -39,19 +39,18 @@ fn main() {
     let mut input_helper = WinitInputHelper::new();
 
     // Generating world
-    let world_depth = 4u32;
+    let world_depth = 5u32;
     let world_width = 4f32.powf(world_depth as f32);
-    let world = World::new(world_depth, 145904);
+    let mut world = World::new(world_depth, 145904);
     info!("World has a memory footprint of {} MB ({} MB for nodes, {} MB for leaves)",
         (world.data.nodes.size()*96 + world.data.voxels .size()*16) as f64 / 8. / 1e6,
         (world.data.nodes.size()*96) as f64 / 8. / 1e6, (world.data.voxels.size()*16) as f64 / 8. / 1e6);
 
     // Creating renderer & camera
     let mut renderer = renderer::Renderer::new(&window, world.raw_node_data(), world.raw_voxel_data());
-    let mut camera = camera::Camera::new(
+    let mut player = camera::Camera::new(
         vec3(0.0, 0.8 * world_width, 0.5 * world_width),
         vec3(1.0, -0.45, -0.5),
-        glam::Vec3::Y,
     );
     let mut projection = camera::Projection::new(45.0_f32.to_radians(), 0.1, 100.0);
 
@@ -80,8 +79,9 @@ fn main() {
                 }
             }
             Event::AboutToWait => {
-                camera.update(&window, &input_helper);
-                renderer.draw(&window, &projection, &camera);
+                world.update();
+                player.update(&window, &input_helper);
+                renderer.draw(&window, &projection, &player, &world);
                 frame_count += 1;
                 if frame_count % 8000 == 0 {
                     let duration = start.elapsed();

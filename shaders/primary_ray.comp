@@ -6,8 +6,8 @@ layout (local_size_x = 8, local_size_y = 8) in;
 #define SIZEOF_NODE 12
 #define NODE_WIDTH 4
 #define NODE_WIDTH_SQRT 2
-#define WORLD_WIDTH (256)
-#define MAX_DEPTH 6
+#define MAX_DEPTH 5
+#define WORLD_WIDTH (0x1u<<(MAX_DEPTH*2))
 
 #define EPSILON 1e-6f
 #define MINI_STEP_SIZE 5e-2f

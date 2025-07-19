@@ -33,14 +33,17 @@ impl<T> Img<T> {
     }
 
     pub fn get(&self, pos: UVec2) -> &T {
+        let pos = pos.clamp(UVec2::ZERO, UVec2::splat(self.width - 1));
         &self.data[(pos.x + pos.y * self.width) as usize]
     }
 
     pub fn get_mut(&mut self, pos: UVec2) -> &mut T {
+        let pos = pos.clamp(UVec2::ZERO, UVec2::splat(self.width - 1));
         &mut self.data[(pos.x + pos.y * self.width) as usize]
     }
 
     pub fn set(&mut self, pos: UVec2, value: T) {
+        let pos = pos.clamp(UVec2::ZERO, UVec2::splat(self.width - 1));
         self.data[(pos.x + pos.y * self.width) as usize] = value;
     }
 

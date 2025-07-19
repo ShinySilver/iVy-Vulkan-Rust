@@ -136,6 +136,41 @@ impl<T: Default + Copy + PartialEq> SparseTree<T> {
         }
     }
 
+    pub fn for_each_mut<F: FnMut(UVec3, &mut T)>(&mut self, mut f: F) {
+        let mut stack = vec![(self.root_index, UVec3::ZERO, 0)];
+        while let Some((node_index, base_pos, depth)) = stack.pop() {
+            let node = self.nodes.acquire(node_index);
+            let is_leaf_level = depth + 1 == self.tree_depth;
+
+            let mut bit = node.bitmask;
+            let mut i = 0;
+            while bit != 0 {
+                if bit & 1 != 0 {
+                    let child_xyz = i as u32;
+
+                    // Decode position
+                    let dx = child_xyz & 0b11;
+                    let dy = (child_xyz >> 2) & 0b11;
+                    let dz = (child_xyz >> 4) & 0b11;
+                    let child_offset = UVec3::new(dx, dy, dz);
+
+                    let child_width = 1 << ((self.tree_depth - depth - 1) * 2);
+                    let child_pos = base_pos + child_offset * child_width;
+
+                    let local_index = (node.bitmask & !(u64::MAX << i)).count_ones() as usize;
+                    if is_leaf_level {
+                        let voxel_index = node.children_index() + local_index;
+                        f(child_pos, self.voxels.acquire_mut(voxel_index));
+                    } else {
+                        let child_node_index = node.children_index() + local_index;
+                        stack.push((child_node_index, child_pos, depth + 1));
+                    }
+                }
+                bit >>= 1;
+                i += 1;
+            }
+        }
+    }
 
     fn create_node_child(&mut self, parent_index: usize, child_xyz: u32, stack_depth: usize) -> (&mut Node, usize) {
         let parent = *self.nodes.acquire(parent_index);

@@ -2,15 +2,16 @@ use ash::ext;
 use ash::khr;
 use ash::vk;
 
-use std::ffi::CStr;
 use ash::prelude::VkResult;
-use log::{debug, info, warn, error};
-use winit::window::Window;
+use log::{debug, error, info, warn};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use std::ffi::CStr;
+use winit::window::Window;
 
 use crate::camera::{Camera, Projection};
 use crate::utils::sparse_tree::Node;
 use crate::voxels::Voxel;
+use crate::world::World;
 
 pub struct Renderer {
     // ----------------------------
@@ -322,7 +323,7 @@ impl Renderer {
                 .unwrap()
         };
 
-        let mut image_count = surface_caps.min_image_count + 1 ;
+        let mut image_count = surface_caps.min_image_count + 1;
         if surface_caps.max_image_count > 0 {
             image_count = image_count.min(surface_caps.max_image_count);
         }
@@ -863,7 +864,7 @@ impl Renderer {
         self.record_commands();
     }
 
-    pub fn draw(&mut self, window: &Window, projection: &Projection, camera: &Camera) {
+    pub fn draw(&mut self, window: &Window, projection: &Projection, camera: &Camera, world: &World) {
         // If during last frame the swapchain was marked as suboptimal, we ensure a resize here
         if self.needs_resize {
             self.resize(window);
@@ -896,7 +897,7 @@ impl Renderer {
         let inv_proj = projection.projection_matrix().inverse();
         let ubo_data = CameraUBO {
             camera_position: camera.position,
-            camera_time: camera.time,
+            camera_time: world.time,
             inv_view,
             inv_proj,
         };
