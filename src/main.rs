@@ -1,20 +1,11 @@
-#![allow(unused)]
-
-use fastnoise2::generator::{prelude::*, Generator};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::event::{Event, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::x11::WindowBuilderExtX11;
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-use crate::utils::sparse_bitmask::SparseBitmask;
-use glam::{uvec3, vec3, UVec3};
-use log::{error, info};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use std::ops::{Add, Mul};
-use std::time::{Duration, Instant};
+use glam::vec3;
+use log::info;
+use std::time::Instant;
 
 mod camera;
 mod renderer;
@@ -22,7 +13,6 @@ mod utils;
 mod world;
 mod voxels;
 
-use crate::utils::sparse_tree::*;
 use crate::world::World;
 
 fn main() {
@@ -92,5 +82,5 @@ fn main() {
             }
             _ => (),
         }
-    });
+    }).unwrap();
 }

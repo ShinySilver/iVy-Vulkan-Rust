@@ -3,13 +3,10 @@ use crate::utils::sparse_bitmask::SparseBitmask;
 use crate::utils::sparse_tree::{Node, SparseTree};
 use crate::voxels::*;
 use fast_poisson::Poisson2D;
-use fastnoise2::generator::*;
 use fastnoise2::SafeNode;
-use glam::{ivec2, ivec3, uvec2, uvec3, vec2, vec3, IVec2, IVec3, UVec2, UVec3, Vec3, Vec3Swizzles};
-use log::{info, warn};
-use rand::distr::Uniform;
-use rand::{random, Rng};
-use std::cmp::PartialEq;
+use glam::{ivec3, uvec2, uvec3, IVec2, UVec2, UVec3, Vec3, Vec3Swizzles};
+use log::info;
+use rand::Rng;
 use std::ops::{Add, Div, Mul};
 use std::time::Instant;
 
@@ -25,7 +22,6 @@ pub struct World {
     start_time: Instant,
     seed: i32,
     width: u32,
-    depth: u32,
 
     /* World planning */
     bottom_heightmap: Img<f32>,
@@ -41,7 +37,6 @@ impl World {
             start_time: Instant::now(),
             seed,
             width: 4u32.pow(depth),
-            depth,
             bottom_heightmap: Default::default(),
             top_heightmap: Default::default(),
         };
@@ -91,7 +86,7 @@ impl World {
         let heightmap = Img::from_node(&node, self.width, 1024. / self.width as f32, self.seed);
 
         /* Using it to build a hard continent shape */
-        let continent_shape = heightmap.map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } });
+        let continent_shape = heightmap.map(|_, _, h| { if *h > -1. { 255u8 } else { 0u8 } });
         //continent_shape.to_file_and_show("continent_shape.png");
 
         /* Building the bottom envelope */
@@ -99,7 +94,7 @@ impl World {
         //bottom_envelope.map(|x, y, v| { (v / 200. * 255.) as u8 }).to_file_and_show("dist_to_sea.png");
 
         /* Building a very simple top envelope */
-        let top_envelope = heightmap.map(|x, y, h| { (h + 1.) / 2. * 255. * self.width as f32 / 1024. });
+        let top_envelope = heightmap.map(|_, _, h| { (h + 1.) / 2. * 255. * self.width as f32 / 1024. });
 
         self.bottom_heightmap = bottom_envelope;
         self.top_heightmap = top_envelope;
@@ -138,10 +133,10 @@ impl World {
         let easing_width = 12. / scaling_factor;
         let easing_factor = 2.2;
         let top_envelope = continent_shape
-            .map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } })
+            .map(|_, _, h| { if *h > -1. { 255u8 } else { 0u8 } })
             .distance_transform()
-            .map(|x, y, h| { h.clamp(0.0, easing_width).div(easing_width).powf(1. / easing_factor) })
-            .map(|x, y, h| { h.max(0.) });
+            .map(|_, _, h| { h.clamp(0.0, easing_width).div(easing_width).powf(1. / easing_factor) })
+            .map(|_, _, h| { h.max(0.) });
 
         /* Assembling the top heightmap */
         let hills_height = 18.;
@@ -155,7 +150,7 @@ impl World {
         let easing_factor = 2.2;
         let lambda = 2e-4;
         let bottom_envelope = continent_shape
-            .map(|x, y, h| { if *h > -1. { 255u8 } else { 0u8 } })
+            .map(|_, _, h| { if *h > -1. { 255u8 } else { 0u8 } })
             .distance_transform()
             .map(|_, _, h| {
                 (h.clamp(0.0, easing_width)
@@ -229,7 +224,7 @@ impl World {
                 let local_pos_2d = pos.xy().wrapping_add(uvec2(offset.x as u32, offset.y as u32));
                 let local_height = self.width / 2 + *self.top_heightmap.get(local_pos_2d) as u32;
                 let local_depth = self.width / 2 - *self.bottom_heightmap.get(local_pos_2d) as u32;
-                for dz in (-RADIUS..=RADIUS) {
+                for dz in -RADIUS..=RADIUS {
                     if offset.x == 0 && offset.y == 0 && dz == 0 { continue; }
                     let height = (pos.z as i32 + dz) as u32;
                     if height <= local_height && height >= local_depth { continue; }
@@ -246,7 +241,7 @@ impl World {
     fn generate_decoration_voxels(&mut self) {
         let tree_spacing = 14;
         let center_z = self.width / 2;
-        let mut sampler = Poisson2D::new()
+        let sampler = Poisson2D::new()
             .with_dimensions([self.width as f64; 2], tree_spacing as f64)
             .with_seed(self.seed as u64);
         let points = sampler.generate()

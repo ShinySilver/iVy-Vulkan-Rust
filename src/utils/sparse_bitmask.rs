@@ -41,7 +41,7 @@ impl SparseBitmask {
         }
     }
 
-    pub fn set(&mut self, mut pos: UVec3, value: bool) {
+    pub fn set(&mut self, pos: UVec3, value: bool) {
         // basically, lookup
         let (is_set, _, mut stack) = self.lookup(pos);
 
@@ -88,7 +88,7 @@ impl SparseBitmask {
             }
 
             // initialize the new child with fully uniform value "is_set"...
-            let mut new_child = self.nodes.acquire_mut(new_child_index);
+            let new_child = self.nodes.acquire_mut(new_child_index);
             *new_child = Node {
                 child_uniform: u8::MAX,
                 child_type: if is_set { u8::MAX } else { 0u8 },
@@ -175,9 +175,9 @@ impl SparseBitmask {
             let node = self.nodes.acquire(self.cached_index);
             let child_local_pos = (pos & (self.cached_width * 2 - 1)) / self.cached_width;
             let child_xyz = child_local_pos.dot(uvec3(1, 2, 4));
-            let is_uniform = (node.child_uniform & (0x1u8 << child_xyz) != 0);
-            let is_set = (node.child_type & (0x1u8 << child_xyz) != 0);
-            return (is_set);
+            let _is_uniform = node.child_uniform & (0x1u8 << child_xyz) != 0;
+            let is_set = node.child_type & (0x1u8 << child_xyz) != 0;
+            return is_set;
         }
         let mut stack = Vec::with_capacity(self.tree_depth);
         let mut node = self.nodes.acquire(self.root_index);
@@ -186,9 +186,9 @@ impl SparseBitmask {
             let child_width = 0x1u32 << (self.tree_depth - stack.len());
             let child_local_pos = (pos & (child_width * 2 - 1)) / child_width; // TODO: improve: check MSB of a bitmask
             let child_xyz = child_local_pos.dot(uvec3(1, 2, 4));
-            let is_uniform = (node.child_uniform & (0x1u8 << child_xyz) != 0);
-            let is_set = (node.child_type & (0x1u8 << child_xyz) != 0);
-            if (is_uniform) {
+            let is_uniform = node.child_uniform & (0x1u8 << child_xyz) != 0;
+            let is_set = node.child_type & (0x1u8 << child_xyz) != 0;
+            if is_uniform {
                 self.cached_index = stack.pop().unwrap();
                 self.cached_width = child_width;
                 self.cached_pos = pos & !(child_width - 1);
@@ -210,9 +210,9 @@ impl SparseBitmask {
             let child_width = 0x1u32 << (self.tree_depth - stack.len());
             let child_local_pos = (pos & (child_width * 2 - 1)) / child_width; // TODO: improve: check MSB of a bitmask
             let child_xyz = child_local_pos.dot(uvec3(1, 2, 4));
-            let is_uniform = (node.child_uniform & (0x1u8 << child_xyz) != 0);
-            let is_set = (node.child_type & (0x1u8 << child_xyz) != 0);
-            if (is_uniform) {
+            let is_uniform = node.child_uniform & (0x1u8 << child_xyz) != 0;
+            let is_set = node.child_type & (0x1u8 << child_xyz) != 0;
+            if is_uniform {
                 return (is_set, node, stack);
             }
             let child_index = node.children_index

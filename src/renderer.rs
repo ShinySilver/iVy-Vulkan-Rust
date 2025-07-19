@@ -2,7 +2,6 @@ use ash::ext;
 use ash::khr;
 use ash::vk;
 
-use ash::prelude::VkResult;
 use log::{debug, error, info, warn};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::ffi::CStr;
@@ -282,7 +281,7 @@ impl Renderer {
             pfn_user_callback: Some(vulkan_debug_utils_callback),
             ..Default::default()
         };
-        let utils_messenger = unsafe {
+        let _messenger = unsafe {
             debug_utils
                 .create_debug_utils_messenger(&debug_create_info, None)
                 .expect("Error creating utils messenger")
@@ -1062,7 +1061,7 @@ impl Renderer {
                 break;
             }
         }
-        if (mem_type_index == u32::MAX) { error!("Failed to find suitable memory type!") }
+        if mem_type_index == u32::MAX { error!("Failed to find suitable memory type!") }
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_requirements.size)
@@ -1364,19 +1363,19 @@ unsafe extern "system" fn vulkan_debug_utils_callback(
     _p_user_data: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
     let message = unsafe { CStr::from_ptr((*p_callback_data).p_message) };
-    let ty = format!("{:?}", message_type).to_lowercase();
+    let message_type = format!("{:?}", message_type).to_lowercase();
     match message_severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => {
-            debug!(target: "iVy::vulkan", "{:?}", message)
+            debug!(target: "iVy::vulkan", "{:?}: {:?}", message_type, message)
         }
         vk::DebugUtilsMessageSeverityFlagsEXT::INFO => {
-            info!(target: "iVy::vulkan", "{:?}", message)
+            info!(target: "iVy::vulkan", "{:?}: {:?}", message_type, message)
         }
         vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => {
-            warn!(target: "iVy::vulkan", "{:?}", message)
+            warn!(target: "iVy::vulkan", "{:?}: {:?}", message_type, message)
         }
         vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => {
-            error!(target: "iVy::vulkan", "{:?}", message)
+            error!(target: "iVy::vulkan", "{:?}: {:?}", message_type, message)
         }
         _ => debug!("[Vulkan][unknown] {:?}", message),
     }

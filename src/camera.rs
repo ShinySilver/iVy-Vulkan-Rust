@@ -1,4 +1,3 @@
-use crate::world::World;
 use glam;
 use glam::vec2;
 use winit::event::MouseButton;
