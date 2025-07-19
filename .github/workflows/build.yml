@@ -48,7 +48,7 @@ jobs:
 
     - name: Upload Release Binary
       if: matrix.channel == 'stable'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: my-binary-${{ runner.os }}
         path: target/release/my-binary
