@@ -32,6 +32,18 @@ jobs:
         vulkan-components: Vulkan-Headers, Vulkan-Loader
         vulkan-use-cache: true
 
+    - name: Expose Vulkan dylibs at runtime (Macos only)
+      if: runner.os == 'macOS'
+      run: |
+        # Point VULKAN_SDK to the 'macOS' install dir
+        SDK_PATH="$(brew --prefix)/Caskroom/vulkan-sdk/*/macOS"
+        echo "VULKAN_SDK=$SDK_PATH" >> $GITHUB_ENV
+        # Let dyld and the linker find libvulkan.1.dylib
+        echo "DYLD_LIBRARY_PATH=$SDK_PATH/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+        echo "LIBRARY_PATH=$SDK_PATH/lib:$LIBRARY_PATH" >> $GITHUB_ENV
+        # Optional: add the SDK tools to PATH
+        echo "PATH=$SDK_PATH/bin:$PATH" >> $GITHUB_ENV
+
     - name: Build
       run: cargo build --verbose
 
