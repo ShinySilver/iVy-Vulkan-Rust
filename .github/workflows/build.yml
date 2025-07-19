@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        channel: [stable, beta, nightly]
+        channel: [stable]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -47,9 +47,8 @@ jobs:
       run: cargo build --release
 
     - name: Upload Release Binary
-      if: matrix.channel == 'stable'
       uses: actions/upload-artifact@v4
       with:
-        name: my-binary-${{ runner.os }}
-        path: target/release/my-binary
+        name: iVy-raytracer-rs-${{ runner.os }}
+        path: target/release/iVy
 
