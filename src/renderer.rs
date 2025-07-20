@@ -253,7 +253,10 @@ impl Renderer {
         extensions.push(ext::debug_utils::NAME.as_ptr());
         extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr());
 
+        #[cfg(debug_assertions)]
         let layers = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
+        #[cfg(not(debug_assertions))]
+        let layers = [];
 
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
